@@ -47,16 +47,24 @@ contract TransactionManager {
     error NotInVotingPeriod();
     error InvalidSignatureLength();
     error InvalidSignatureV();
+    error UseSignProposalToFinalize();
 
     ValidatorFactory public validatorFactory;
     ILLMOracle public llmOracle;
 
+    // Optimized voting data structure
+    struct VoteData {
+        uint8 yesVotes; // Count of yes votes (max 5 validators)
+        uint8 noVotes; // Count of no votes (max 5 validators)
+        uint8 votersBitmap; // Bitmap: bit i set if validator i voted
+        uint8 votesBitmap; // Bitmap: bit i set if validator i voted YES
+    }
+
     mapping(bytes32 => Proposal) public proposals;
+    mapping(bytes32 => ChallengeData) public challengeData;
+    mapping(bytes32 => VoteData) public proposalVotes; // Optimized vote storage
     mapping(bytes32 => mapping(address => bool)) public hasValidatorSigned;
-    mapping(bytes32 => mapping(address => bool)) public hasValidatorVoted;
-    mapping(bytes32 => mapping(address => bool)) public validatorVotes; // true = yes, false = no
     mapping(bytes32 => address[]) public proposalSigners;
-    mapping(bytes32 => address[]) public proposalVoters;
     uint256 public proposalCount;
 
     uint256 public constant CHALLENGE_PERIOD = 10; // blocks - as per requirement
@@ -66,29 +74,29 @@ contract TransactionManager {
     uint256 public constant SLASH_PERCENTAGE = 10; // 10% slash for false challenges
 
     enum ProposalState {
-        Proposed, // Just submitted
-        OptimisticApproved, // Enough signatures, optimistically approved
-        Challenged, // Someone challenged the proposal
-        Voting, // In voting period after challenge
-        Finalized, // Final decision made
-        Reverted // Proposal was invalid/rejected
+        Proposed,           // Just submitted, awaiting LLM validation
+        OptimisticApproved, // LLM approved, in challenge period
+        Challenged,         // Challenge initiated, voting in progress
+        Finalized,          // Approved and executed
+        Rejected            // Rejected by LLM or challenge voting
     }
 
+    // Core proposal data - optimized structure
     struct Proposal {
         bytes32 proposalId;
         string transaction;
         address proposer;
         uint256 blockNumber;
-        uint256 challengeDeadline;
-        uint256 votingDeadline;
         ProposalState state;
+        uint256 deadline;              // Universal deadline (challenge or voting)
+        uint8 signatureCount;          // Number of validator signatures (max 5)
+        address[] selectedValidators;  // Validators selected for this proposal
+    }
+
+    // Challenge-specific data - separated for modularity
+    struct ChallengeData {
         address challenger;
-        uint256 signatureCount;
-        uint256 yesVotes;
-        uint256 noVotes;
-        bool llmValidation;
-        bool executed;
-        address[] selectedValidators; // validators selected for this proposal
+        uint256 challengeBlock;
     }
 
     constructor(address _validatorFactory, address _llmOracle) {
@@ -102,6 +110,7 @@ contract TransactionManager {
     /**
      * @dev Submit a proposal for consensus
      * @param transaction Transaction string to be validated (e.g., "Approve loan for user X based on LLM analysis")
+     * @dev NOTE: For async Oracle validation, we could use a callback function to update the proposal state.
      * @return proposalId Unique identifier for the proposal
      */
     function submitProposal(string calldata transaction) external returns (bytes32 proposalId) {
@@ -114,23 +123,21 @@ contract TransactionManager {
         address[] memory topValidators = _getTopValidators();
         if (topValidators.length < REQUIRED_SIGNATURES) revert NotEnoughValidators();
 
-        // Perform LLM validation using external oracle
+        // Perform LLM validation immediately
         bool llmResult = llmOracle.validateTransaction(transaction);
+        
+        // Create proposal with state based on LLM result
+        ProposalState initialState = llmResult ? ProposalState.OptimisticApproved : ProposalState.Rejected;
+        uint256 deadline = llmResult ? block.number + CHALLENGE_PERIOD : 0;
 
         proposals[proposalId] = Proposal({
             proposalId: proposalId,
             transaction: transaction,
             proposer: msg.sender,
             blockNumber: block.number,
-            state: ProposalState.Proposed,
-            challengeDeadline: block.number + CHALLENGE_PERIOD,
-            votingDeadline: 0,
-            challenger: address(0),
+            state: initialState,
+            deadline: deadline,
             signatureCount: 0,
-            yesVotes: 0,
-            noVotes: 0,
-            llmValidation: llmResult,
-            executed: false,
             selectedValidators: topValidators
         });
 
@@ -143,15 +150,15 @@ contract TransactionManager {
     }
 
     /**
-     * @dev Validators sign a proposal using ECDSA signatures
+     * @dev Validators sign a proposal using ECDSA signatures to finalize it
      * @param proposalId Proposal identifier
      * @param signature ECDSA signature of the proposal hash
      */
     function signProposal(bytes32 proposalId, bytes calldata signature) external {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
-        if (proposal.state != ProposalState.Proposed) revert InvalidProposalState();
-        if (block.number > proposal.challengeDeadline) revert ChallengePeriodExpired();
+        if (proposal.state != ProposalState.OptimisticApproved) revert InvalidProposalState();
+        if (block.number > proposal.deadline) revert ChallengePeriodExpired();
         if (hasValidatorSigned[proposalId][msg.sender]) revert AlreadySigned();
 
         // Verify that sender is one of the selected validators for this proposal
@@ -169,11 +176,10 @@ contract TransactionManager {
 
         emit ValidatorSigned(proposalId, msg.sender);
 
-        // Check if we have enough signatures for optimistic approval
-        if (proposal.signatureCount >= REQUIRED_SIGNATURES && proposal.llmValidation) {
-            proposal.state = ProposalState.OptimisticApproved;
-            proposal.executed = true;
-            emit ProposalOptimisticallyApproved(proposalId);
+        // Check if we have enough signatures for finalization
+        if (proposal.signatureCount >= REQUIRED_SIGNATURES) {
+            proposal.state = ProposalState.Finalized;
+            emit ProposalFinalized(proposalId, true);
         }
     }
 
@@ -185,13 +191,18 @@ contract TransactionManager {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
         if (proposal.state != ProposalState.OptimisticApproved) revert InvalidProposalState();
-        if (block.number > proposal.challengeDeadline) revert ChallengePeriodExpired();
+        if (block.number > proposal.deadline) revert ChallengePeriodExpired();
         if (!validatorFactory.isActiveValidator(msg.sender)) revert NotAValidator();
 
-        proposal.state = ProposalState.Voting;
-        proposal.challenger = msg.sender;
-        proposal.executed = false; // Revert optimistic execution
-        proposal.votingDeadline = block.number + VOTING_PERIOD;
+        // Set proposal to challenged state with voting deadline
+        proposal.state = ProposalState.Challenged;
+        proposal.deadline = block.number + VOTING_PERIOD;
+        
+        // Store challenge data separately
+        challengeData[proposalId] = ChallengeData({
+            challenger: msg.sender,
+            challengeBlock: block.number
+        });
 
         emit ProposalChallenged(proposalId, msg.sender);
     }
@@ -205,26 +216,18 @@ contract TransactionManager {
     function submitVote(bytes32 proposalId, bool support, bytes calldata signature) external {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
-        if (proposal.state != ProposalState.Voting) revert InvalidProposalState();
-        if (block.number > proposal.votingDeadline) revert VotingPeriodExpired();
+        if (proposal.state != ProposalState.Challenged) revert InvalidProposalState();
+        if (block.number > proposal.deadline) revert VotingPeriodExpired();
         if (!validatorFactory.isActiveValidator(msg.sender)) revert NotAValidator();
-        if (hasValidatorVoted[proposalId][msg.sender]) revert AlreadyVoted();
+        if (_hasValidatorVoted(proposalId, msg.sender)) revert AlreadyVoted();
 
         // Verify the vote signature
         bytes32 voteHash = _getVoteHash(proposalId, support);
         address recoveredSigner = _recoverSigner(voteHash, signature);
         if (recoveredSigner != msg.sender) revert InvalidSignature();
 
-        // Record the vote
-        hasValidatorVoted[proposalId][msg.sender] = true;
-        validatorVotes[proposalId][msg.sender] = support;
-        proposalVoters[proposalId].push(msg.sender);
-
-        if (support) {
-            proposal.yesVotes++;
-        } else {
-            proposal.noVotes++;
-        }
+        // Record the vote using optimized bitmap
+        _recordVote(proposalId, msg.sender, support);
 
         emit VoteSubmitted(proposalId, msg.sender, support);
     }
@@ -236,32 +239,33 @@ contract TransactionManager {
     function resolveChallenge(bytes32 proposalId) external {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
-        if (proposal.state != ProposalState.Voting) revert InvalidProposalState();
-        if (block.number <= proposal.votingDeadline) revert VotingPeriodNotEnded();
+        if (proposal.state != ProposalState.Challenged) revert InvalidProposalState();
+        if (block.number <= proposal.deadline) revert VotingPeriodNotEnded();
 
-        uint256 totalVotes = proposal.yesVotes + proposal.noVotes;
+        VoteData memory votes = proposalVotes[proposalId];
+        ChallengeData memory challenge = challengeData[proposalId];
+        uint256 totalVotes = votes.yesVotes + votes.noVotes;
         bool approved = false;
 
         if (totalVotes > 0) {
             // Majority decides - if >=50% vote no, reject the proposal
             uint256 rejectionThreshold = (totalVotes + 1) / 2; // Ceiling division for >=50%
-            approved = proposal.noVotes < rejectionThreshold;
+            approved = votes.noVotes < rejectionThreshold;
         } else {
-            // No votes cast - default to original decision (signatures + LLM)
-            approved = proposal.signatureCount >= REQUIRED_SIGNATURES && proposal.llmValidation;
+            // No votes cast - default to original LLM decision (was already OptimisticApproved)
+            approved = true;
         }
 
         // Determine if challenge was honest or false
         bool challengeWasHonest = !approved; // Challenge was honest if proposal was ultimately rejected
 
         // Handle slashing
-        _handleSlashing(proposalId, proposal.challenger, challengeWasHonest);
+        _handleSlashing(proposalId, challenge.challenger, challengeWasHonest);
 
         // Update proposal state
-        proposal.state = approved ? ProposalState.Finalized : ProposalState.Reverted;
-        proposal.executed = approved;
+        proposal.state = approved ? ProposalState.Finalized : ProposalState.Rejected;
 
-        emit ChallengeResolved(proposalId, approved, proposal.yesVotes, proposal.noVotes);
+        emit ChallengeResolved(proposalId, approved, votes.yesVotes, votes.noVotes);
         emit ProposalFinalized(proposalId, approved);
     }
 
@@ -276,12 +280,13 @@ contract TransactionManager {
         bool approved = false;
 
         if (proposal.state == ProposalState.OptimisticApproved) {
-            if (block.number <= proposal.challengeDeadline) revert ChallengePeriodNotEnded();
-            // No challenge during period - approve
-            approved = true;
-            proposal.executed = true;
-            proposal.state = ProposalState.Finalized;
-        } else if (proposal.state == ProposalState.Voting) {
+            // Check if challenge period has ended
+            if (block.number <= proposal.deadline) revert ChallengePeriodNotEnded();
+            // No challenge during period - but still need validator signatures for finalization
+            // This function just expires the challenge period, validators still need to sign
+            // Proposal remains in OptimisticApproved state waiting for signatures
+            revert UseSignProposalToFinalize();
+        } else if (proposal.state == ProposalState.Challenged) {
             // Should use resolveChallenge instead
             revert UseResolveChallengeForVotingProposals();
         } else {
@@ -326,6 +331,69 @@ contract TransactionManager {
         uint256 count = validatorCount < VALIDATOR_SET_SIZE ? validatorCount : VALIDATOR_SET_SIZE;
         (address[] memory topValidators, ) = validatorFactory.getTopNValidators(count);
         return topValidators;
+    }
+
+    /**
+     * @dev Get validator index in the selected validators array for a proposal
+     * @param proposalId Proposal identifier
+     * @param validator Validator address
+     * @return index Validator index (0-4), reverts if not found
+     */
+    function _getValidatorIndex(bytes32 proposalId, address validator) public view returns (uint8 index) {
+        address[] memory selectedValidators = proposals[proposalId].selectedValidators;
+        for (uint8 i = 0; i < selectedValidators.length; i++) {
+            if (selectedValidators[i] == validator) {
+                return i;
+            }
+        }
+        revert NotASelectedValidator();
+    }
+
+    /**
+     * @dev Check if validator has voted using bitmap
+     * @param proposalId Proposal identifier
+     * @param validator Validator address
+     * @return hasVoted Whether validator has voted
+     */
+    function _hasValidatorVoted(bytes32 proposalId, address validator) internal view returns (bool hasVoted) {
+        uint8 index = _getValidatorIndex(proposalId, validator);
+        uint8 votersBitmap = proposalVotes[proposalId].votersBitmap;
+        return (votersBitmap >> index) & 1 == 1;
+    }
+
+    /**
+     * @dev Get validator vote using bitmap
+     * @param proposalId Proposal identifier
+     * @param validator Validator address
+     * @return support Vote (true = yes, false = no)
+     */
+    function _getValidatorVote(bytes32 proposalId, address validator) internal view returns (bool support) {
+        uint8 index = _getValidatorIndex(proposalId, validator);
+        uint8 votesBitmap = proposalVotes[proposalId].votesBitmap;
+        return (votesBitmap >> index) & 1 == 1;
+    }
+
+    /**
+     * @dev Record validator vote using bitmaps
+     * @param proposalId Proposal identifier
+     * @param validator Validator address
+     * @param support Vote (true = yes, false = no)
+     */
+    function _recordVote(bytes32 proposalId, address validator, bool support) internal {
+        uint8 index = _getValidatorIndex(proposalId, validator);
+        VoteData storage votes = proposalVotes[proposalId];
+
+        // Set voted bit
+        votes.votersBitmap |= uint8(1 << index);
+
+        // Set/clear vote bit and update counters
+        if (support) {
+            votes.votesBitmap |= uint8(1 << index);
+            votes.yesVotes++;
+        } else {
+            votes.votesBitmap &= ~uint8(1 << index);
+            votes.noVotes++;
+        }
     }
 
     /**
@@ -456,19 +524,31 @@ contract TransactionManager {
         )
     {
         Proposal storage proposal = proposals[proposalId];
+        VoteData memory votes = proposalVotes[proposalId];
+        ChallengeData memory challenge = challengeData[proposalId];
+        
+        // Map deadline based on state
+        uint256 challengeDeadline_ = (proposal.state == ProposalState.OptimisticApproved) ? proposal.deadline : 0;
+        uint256 votingDeadline_ = (proposal.state == ProposalState.Challenged) ? proposal.deadline : 0;
+        
+        // Derive execution status from state
+        bool executed_ = (proposal.state == ProposalState.Finalized);
+        // Derive LLM validation from state (if OptimisticApproved or Finalized, LLM said yes)
+        bool llmValidation_ = (proposal.state != ProposalState.Rejected);
+        
         return (
             proposal.transaction,
             proposal.proposer,
             proposal.blockNumber,
             proposal.state,
-            proposal.challengeDeadline,
-            proposal.votingDeadline,
-            proposal.challenger,
+            challengeDeadline_,
+            votingDeadline_,
+            challenge.challenger,
             proposal.signatureCount,
-            proposal.yesVotes,
-            proposal.noVotes,
-            proposal.llmValidation,
-            proposal.executed
+            votes.yesVotes,
+            votes.noVotes,
+            llmValidation_,
+            executed_
         );
     }
 
@@ -479,18 +559,30 @@ contract TransactionManager {
      */
     function getProposalStruct(bytes32 proposalId) external view returns (ProposalInfo memory info) {
         Proposal storage proposal = proposals[proposalId];
+        VoteData memory votes = proposalVotes[proposalId];
+        ChallengeData memory challenge = challengeData[proposalId];
+        
+        // Map deadline based on state
+        uint256 challengeDeadline_ = (proposal.state == ProposalState.OptimisticApproved) ? proposal.deadline : 0;
+        uint256 votingDeadline_ = (proposal.state == ProposalState.Challenged) ? proposal.deadline : 0;
+        
+        // Derive execution status from state
+        bool executed_ = (proposal.state == ProposalState.Finalized);
+        // Derive LLM validation from state (if OptimisticApproved or Finalized, LLM said yes)
+        bool llmValidation_ = (proposal.state != ProposalState.Rejected);
+        
         info.transaction = proposal.transaction;
         info.proposer = proposal.proposer;
         info.blockNumber = proposal.blockNumber;
         info.state = proposal.state;
-        info.challengeDeadline = proposal.challengeDeadline;
-        info.votingDeadline = proposal.votingDeadline;
-        info.challenger = proposal.challenger;
+        info.challengeDeadline = challengeDeadline_;
+        info.votingDeadline = votingDeadline_;
+        info.challenger = challenge.challenger;
         info.signatureCount = proposal.signatureCount;
-        info.yesVotes = proposal.yesVotes;
-        info.noVotes = proposal.noVotes;
-        info.llmValidation = proposal.llmValidation;
-        info.executed = proposal.executed;
+        info.yesVotes = votes.yesVotes;
+        info.noVotes = votes.noVotes;
+        info.llmValidation = llmValidation_;
+        info.executed = executed_;
     }
 
     /**
@@ -516,8 +608,27 @@ contract TransactionManager {
      * @param proposalId Proposal identifier
      * @return voters Array of addresses that voted on the proposal
      */
-    function getProposalVoters(bytes32 proposalId) external view returns (address[] memory) {
-        return proposalVoters[proposalId];
+    function getProposalVoters(bytes32 proposalId) external view returns (address[] memory voters) {
+        address[] memory selectedValidators = proposals[proposalId].selectedValidators;
+        uint8 votersBitmap = proposalVotes[proposalId].votersBitmap;
+
+        // Count voters first
+        uint256 voterCount = 0;
+        for (uint8 i = 0; i < selectedValidators.length; i++) {
+            if ((votersBitmap >> i) & 1 == 1) {
+                voterCount++;
+            }
+        }
+
+        // Build voters array
+        voters = new address[](voterCount);
+        uint256 index = 0;
+        for (uint8 i = 0; i < selectedValidators.length; i++) {
+            if ((votersBitmap >> i) & 1 == 1) {
+                voters[index] = selectedValidators[i];
+                index++;
+            }
+        }
     }
 
     /**
@@ -528,8 +639,17 @@ contract TransactionManager {
      * @return vote The vote (true for yes, false for no)
      */
     function getValidatorVote(bytes32 proposalId, address validator) external view returns (bool hasVoted, bool vote) {
-        hasVoted = hasValidatorVoted[proposalId][validator];
-        vote = validatorVotes[proposalId][validator];
+        // Check if validator is in selected validators (will revert if not found)
+        try this._getValidatorIndex(proposalId, validator) returns (uint8 index) {
+            uint8 votersBitmap = proposalVotes[proposalId].votersBitmap;
+            uint8 votesBitmap = proposalVotes[proposalId].votesBitmap;
+            hasVoted = (votersBitmap >> index) & 1 == 1;
+            vote = (votesBitmap >> index) & 1 == 1;
+        } catch {
+            // Validator not selected for this proposal
+            hasVoted = false;
+            vote = false;
+        }
     }
 
     /**
@@ -539,9 +659,7 @@ contract TransactionManager {
      */
     function isProposalApproved(bytes32 proposalId) external view returns (bool) {
         Proposal storage proposal = proposals[proposalId];
-        return
-            proposal.state == ProposalState.OptimisticApproved ||
-            (proposal.state == ProposalState.Finalized && proposal.executed);
+        return proposal.state == ProposalState.Finalized;
     }
 
     /**
@@ -576,7 +694,7 @@ contract TransactionManager {
      */
     function canChallengeProposal(bytes32 proposalId) external view returns (bool) {
         Proposal storage proposal = proposals[proposalId];
-        return proposal.state == ProposalState.OptimisticApproved && block.number <= proposal.challengeDeadline;
+        return proposal.state == ProposalState.OptimisticApproved && block.number <= proposal.deadline;
     }
 
     /**
@@ -586,7 +704,7 @@ contract TransactionManager {
      */
     function isInVotingPeriod(bytes32 proposalId) external view returns (bool) {
         Proposal storage proposal = proposals[proposalId];
-        return proposal.state == ProposalState.Voting && block.number <= proposal.votingDeadline;
+        return proposal.state == ProposalState.Challenged && block.number <= proposal.deadline;
     }
 
     /**

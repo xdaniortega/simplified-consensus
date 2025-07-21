@@ -346,7 +346,7 @@ contract TransactionManagerTest is Test {
             ,
             bool executed
         ) = transactionManager.getProposal(proposalId);
-        assertTrue(uint8(state) == uint8(TransactionManager.ProposalState.Voting));
+        assertTrue(uint8(state) == uint8(TransactionManager.ProposalState.Challenged));
         assertEq(votingDeadline, block.number + 30);
         assertEq(challengerAddr, validator1);
         assertFalse(executed); // Should revert optimistic execution
@@ -545,7 +545,7 @@ contract TransactionManagerTest is Test {
         (, , , TransactionManager.ProposalState state, , , , , , , , bool executed) = transactionManager.getProposal(
             proposalId
         );
-        assertTrue(uint8(state) == uint8(TransactionManager.ProposalState.Reverted));
+        assertTrue(uint8(state) == uint8(TransactionManager.ProposalState.Rejected));
         assertFalse(executed);
     }
 

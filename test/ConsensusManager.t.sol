@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../src/TransactionManager.sol";
 import "../src/ConsensusManager.sol";
-import "../src/ValidatorFactory.sol";
+import "../src/StakingManager.sol";
 import "../src/ValidatorLogic.sol";
 import "../src/oracles/MockLLMOracle.sol";
 import "../test/mock/ERC20TokenMock.sol";
@@ -37,7 +37,7 @@ import "../src/interfaces/IConsensusProvider.sol";
 contract ConsensusManagerTest is Test {
     TransactionManager public transactionManager;
     ConsensusManager public consensusManager;
-    ValidatorFactory public validatorFactory;
+    StakingManager public stakingManager;
     MockLLMOracle public llmOracle;
     ERC20TokenMock public token;
     
@@ -57,12 +57,12 @@ contract ConsensusManagerTest is Test {
     
     function setUp() public {
         token = new ERC20TokenMock();
-        validatorFactory = new ValidatorFactory(address(token), MIN_STAKE, 10, 5);
+        stakingManager = new StakingManager(address(token), MIN_STAKE, 10, 5);
         llmOracle = new MockLLMOracle();
         
         // Deploy TransactionManager which internally deploys ConsensusManager
         transactionManager = new TransactionManager(
-            address(validatorFactory),
+            address(stakingManager),
             address(llmOracle)
         );
         
@@ -82,8 +82,8 @@ contract ConsensusManagerTest is Test {
             token.mint(validator, MIN_STAKE * 2);
             
             vm.startPrank(validator);
-            token.approve(address(validatorFactory), MIN_STAKE);
-            validatorFactory.stake(MIN_STAKE);
+            token.approve(address(stakingManager), MIN_STAKE);
+            stakingManager.stake(MIN_STAKE);
             vm.stopPrank();
         }
     }

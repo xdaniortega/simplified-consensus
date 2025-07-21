@@ -9,14 +9,14 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./ValidatorLogic.sol";
 
 /**
- * @title ValidatorFactory
- * @notice Responsible for deploying BeaconProxy contracts for validators and managing their lifecycle.
+ * @title StakingManager
+ * @notice Manages validator staking, registration, and selection for consensus.
  * @dev Acts as a trusted operator to slash or reward validators based on consensus decisions.
- *      Holds a reference to a ConsensusModule (e.g., PoSConsensus) to interact with logic layer without tight coupling.
+ *      Deploys BeaconProxy contracts for validators and manages their lifecycle.
  *      Supports CREATE2 for predictable addresses and pre-funding capabilities.
  *      Manages staking positions for granular stake tracking.
  */
-contract ValidatorFactory is ReentrancyGuard {
+contract StakingManager is ReentrancyGuard {
     using SafeERC20 for IERC20;
     event ValidatorCreated(address indexed validator, address indexed proxy, uint256 stake);
     event ValidatorRemoved(address indexed validator);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "./ValidatorFactory.sol";
+import "./StakingManager.sol";
 import "./interfaces/ILLMOracle.sol";
 import "./interfaces/IConsensusProvider.sol";
 import "./ConsensusManager.sol";
@@ -20,7 +20,7 @@ contract TransactionManager is ReentrancyGuard {
     event LLMValidationResult(bytes32 indexed proposalId, bool isValid);
 
     // Custom errors
-    error InvalidValidatorFactory();
+    error InvalidStakingManager();
     error InvalidLLMOracle();
     error EmptyTransaction();
     error ProposalAlreadyExists();
@@ -52,7 +52,7 @@ contract TransactionManager is ReentrancyGuard {
         address[] selectedValidators;  // Validators selected for this proposal
     }
 
-    ValidatorFactory public immutable validatorFactory;
+    StakingManager public immutable stakingManager;
     ILLMOracle public immutable llmOracle;
     IConsensusProvider public immutable consensusProvider;
 
@@ -65,16 +65,16 @@ contract TransactionManager is ReentrancyGuard {
     uint256 public constant REQUIRED_SIGNATURES = 3; // 3 out of 5 validators
     uint256 public constant VALIDATOR_SET_SIZE = 5; // top 5 validators for consensus
 
-    constructor(address _validatorFactory, address _llmOracle) {
-        if (_validatorFactory == address(0)) revert InvalidValidatorFactory();
+    constructor(address _stakingManager, address _llmOracle) {
+        if (_stakingManager == address(0)) revert InvalidStakingManager();
         if (_llmOracle == address(0)) revert InvalidLLMOracle();
 
-        validatorFactory = ValidatorFactory(_validatorFactory);
+        stakingManager = StakingManager(_stakingManager);
         llmOracle = ILLMOracle(_llmOracle);
         
         // Deploy ConsensusManager with this contract as transaction manager
         consensusProvider = IConsensusProvider(
-            address(new ConsensusManager(_validatorFactory, address(this)))
+            address(new ConsensusManager(_stakingManager, address(this)))
         );
     }
 
@@ -217,13 +217,13 @@ contract TransactionManager is ReentrancyGuard {
      * @return validators Array of top validator addresses
      */
     function _getTopValidators() internal view returns (address[] memory) {
-        uint256 validatorCount = validatorFactory.getValidatorCount();
+        uint256 validatorCount = stakingManager.getValidatorCount();
         if (validatorCount == 0) {
             return new address[](0);
         }
 
         uint256 count = validatorCount < VALIDATOR_SET_SIZE ? validatorCount : VALIDATOR_SET_SIZE;
-        (address[] memory topValidators, ) = validatorFactory.getTopNValidators(count);
+        (address[] memory topValidators, ) = stakingManager.getTopNValidators(count);
         return topValidators;
     }
 
@@ -353,7 +353,7 @@ contract TransactionManager is ReentrancyGuard {
      * @return count Number of active validators
      */
     function getValidatorCount() external view returns (uint256) {
-        return validatorFactory.getValidatorCount();
+        return stakingManager.getValidatorCount();
     }
 
     /**
@@ -441,6 +441,14 @@ contract TransactionManager is ReentrancyGuard {
         returns (bool hasVoted, bool support)
     {
         return consensusProvider.getValidatorVote(proposalId, validator);
+    }
+
+    /**
+     * @dev Get the Staking Manager address
+     * @return manager Address of the Staking Manager contract
+     */
+    function getStakingManager() external view returns (StakingManager) {
+        return stakingManager;
     }
 
     /**

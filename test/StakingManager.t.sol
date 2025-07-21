@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "forge-std/Test.sol";
-import "../src/ValidatorFactory.sol";
+import "../src/StakingManager.sol";
 import "../src/ValidatorLogic.sol";
 import "../test/mock/ERC20TokenMock.sol";
+import "forge-std/Test.sol";
 
 /**
- * @title ValidatorFactory Test Suite
- * @notice Comprehensive test suite for ValidatorFactory and ValidatorLogic contracts
+ * @title StakingManager Test Suite
+ * @notice Test suite for StakingManager and ValidatorLogic contracts
  * @dev This test suite covers validator staking mechanics using beacon proxy pattern:
  *      - Validator registration and staking with ERC20 tokens
  *        (e.g. test_Stake_WhenCalled_DeploysBeaconProxyAndInitializesCorrectly, testStake_MultipleValidators)
@@ -37,8 +37,8 @@ import "../test/mock/ERC20TokenMock.sol";
  * 6. Integration Tests: Multi-validator scenarios and complex interactions
  *    (e.g. testRemoveValidatorFromArray_RemovesMiddle, test_ValidatorLogic_MultipleStakingOperations)
  */
-contract ValidatorFactoryTest is Test {
-    ValidatorFactory factory;
+contract StakingManagerTest is Test {
+    StakingManager factory;
     ERC20TokenMock token;
     address[] public validators;
     address alice = vm.addr(1);
@@ -51,7 +51,7 @@ contract ValidatorFactoryTest is Test {
 
     function setUp() public {
         token = new ERC20TokenMock();
-        factory = new ValidatorFactory(address(token), MIN_STAKE, MAX_VALIDATORS, THRESHOLD);
+        factory = new StakingManager(address(token), MIN_STAKE, MAX_VALIDATORS, THRESHOLD);
         token.mint(alice, 10000);
         token.mint(bob, 10000);
         token.mint(charlie, 10000);
@@ -66,7 +66,7 @@ contract ValidatorFactoryTest is Test {
         token.approve(address(factory), 2000);
         address expectedProxy = factory.computeProxyAddress(alice, 2000);
         vm.expectEmit(true, true, true, true);
-        emit ValidatorFactory.ValidatorCreated(alice, expectedProxy, 2000);
+        emit StakingManager.ValidatorCreated(alice, expectedProxy, 2000);
         factory.stake(2000);
         address proxy = factory.validatorToProxy(alice);
         assertEq(proxy, expectedProxy);
@@ -89,9 +89,9 @@ contract ValidatorFactoryTest is Test {
         ValidatorLogic logic = ValidatorLogic(proxy);
         // Unstake part (should remove validator and withdraw all if below minimum)
         vm.expectEmit(true, true, true, true);
-        emit ValidatorFactory.Unstaked(alice, 2000);
+        emit StakingManager.Unstaked(alice, 2000);
         vm.expectEmit(true, true, true, true);
-        emit ValidatorFactory.ValidatorRemoved(alice);
+        emit StakingManager.ValidatorRemoved(alice);
         factory.unstake(2000);
         assertEq(logic.getStakeAmount(), 0);
         assertFalse(factory.isValidator(alice));

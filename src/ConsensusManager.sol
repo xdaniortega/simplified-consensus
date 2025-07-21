@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "./interfaces/IConsensusProvider.sol";
-import "./ValidatorFactory.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./interfaces/IConsensusProvider.sol";
+import "./StakingManager.sol";
 
 /**
  * @title ConsensusManager
@@ -46,7 +46,7 @@ contract ConsensusManager is IConsensusProvider, ReentrancyGuard {
         uint8 votesBitmap;     // Bitmap: bit i set if validator i voted YES
     }
 
-    ValidatorFactory public immutable validatorFactory;
+    StakingManager public immutable stakingManager;
     address public immutable transactionManager;
 
     mapping(bytes32 => ConsensusData) public consensusData;
@@ -66,8 +66,8 @@ contract ConsensusManager is IConsensusProvider, ReentrancyGuard {
         _;
     }
 
-    constructor(address _validatorFactory, address _transactionManager) {
-        validatorFactory = ValidatorFactory(_validatorFactory);
+    constructor(address _stakingManager, address _transactionManager) {
+        stakingManager = StakingManager(_stakingManager);
         transactionManager = _transactionManager;
     }
 
@@ -100,7 +100,7 @@ contract ConsensusManager is IConsensusProvider, ReentrancyGuard {
         ConsensusData storage consensus = consensusData[proposalId];
         if (consensus.state != ConsensusState.Pending) revert InvalidState();
         if (block.number > consensus.deadline) revert ChallengePeriodExpired();
-        if (!validatorFactory.isActiveValidator(challenger)) revert NotAValidator();
+        if (!stakingManager.isActiveValidator(challenger)) revert NotAValidator();
 
         // Transition to challenged state with voting deadline
         consensus.state = ConsensusState.Challenged;
@@ -127,7 +127,7 @@ contract ConsensusManager is IConsensusProvider, ReentrancyGuard {
         ConsensusData storage consensus = consensusData[proposalId];
         if (consensus.state != ConsensusState.Challenged) revert InvalidState();
         if (block.number > consensus.deadline) revert VotingPeriodExpired();
-        if (!validatorFactory.isActiveValidator(voter)) revert NotAValidator();
+        if (!stakingManager.isActiveValidator(voter)) revert NotAValidator();
         if (_hasValidatorVoted(proposalId, voter)) revert AlreadyVoted();
 
         // Verify the vote signature
@@ -199,10 +199,10 @@ contract ConsensusManager is IConsensusProvider, ReentrancyGuard {
     function _handleSlashing(bytes32 proposalId, address challenger, bool challengeWasHonest) internal {
         if (!challengeWasHonest) {
             // False challenge - slash challenger's stake
-            uint256 challengerStake = validatorFactory.getValidatorStake(challenger);
+            uint256 challengerStake = stakingManager.getValidatorStake(challenger);
             if (challengerStake > 0) {
                 uint256 slashAmount = (challengerStake * SLASH_PERCENTAGE) / 100;
-                validatorFactory.slashValidator(challenger, slashAmount, "False challenge");
+                stakingManager.slashValidator(challenger, slashAmount, "False challenge");
                 emit ValidatorSlashed(proposalId, challenger, slashAmount, false);
             }
         } else {

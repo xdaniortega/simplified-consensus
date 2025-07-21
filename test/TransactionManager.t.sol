@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../src/TransactionManager.sol";
 import "../src/ConsensusManager.sol";
-import "../src/ValidatorFactory.sol";
+import "../src/StakingManager.sol";
 import "../src/ValidatorLogic.sol";
 import "../src/oracles/MockLLMOracle.sol";
 import "../test/mock/ERC20TokenMock.sol";
@@ -39,7 +39,7 @@ import "../src/interfaces/IConsensusProvider.sol";
 contract TransactionManagerTest is Test {
     TransactionManager public transactionManager;
     ConsensusManager public consensusManager;
-    ValidatorFactory public validatorFactory;
+    StakingManager public stakingManager;
     MockLLMOracle public llmOracle;
     ERC20TokenMock public token;
     
@@ -62,13 +62,13 @@ contract TransactionManagerTest is Test {
     
     function setUp() public {
         token = new ERC20TokenMock();
-        validatorFactory = new ValidatorFactory(address(token), MIN_STAKE, 10, 5);
+        stakingManager = new StakingManager(address(token), MIN_STAKE, 10, 5);
         
         llmOracle = new MockLLMOracle();
         
         // Deploy TransactionManager which will internally deploy ConsensusManager
         transactionManager = new TransactionManager(
-            address(validatorFactory),
+            address(stakingManager),
             address(llmOracle)
         );
         
@@ -85,8 +85,8 @@ contract TransactionManagerTest is Test {
             token.mint(validator, MIN_STAKE * 2);
             
             vm.startPrank(validator);
-            token.approve(address(validatorFactory), MIN_STAKE);
-            validatorFactory.stake(MIN_STAKE);
+            token.approve(address(stakingManager), MIN_STAKE);
+            stakingManager.stake(MIN_STAKE);
             vm.stopPrank();
         }
     }
@@ -134,7 +134,7 @@ contract TransactionManagerTest is Test {
     }
     
     function test_DeploymentState() public view {
-        assertEq(address(transactionManager.validatorFactory()), address(validatorFactory));
+        assertEq(address(transactionManager.getStakingManager()), address(stakingManager));
         assertEq(address(transactionManager.llmOracle()), address(llmOracle));
         assertEq(address(transactionManager.consensusProvider()), address(consensusManager));
         assertEq(transactionManager.proposalCount(), 0);
@@ -210,7 +210,7 @@ contract TransactionManagerTest is Test {
         // Use approved transaction
         string memory approvedTx = createApprovedTransaction();
         bytes32 proposalId = transactionManager.submitProposal(approvedTx);
-        uint256 aliceInitialStake = validatorFactory.getValidatorStake(alice);
+        uint256 aliceInitialStake = stakingManager.getValidatorStake(alice);
         
         // Challenge proposal
         vm.prank(alice);
@@ -259,7 +259,7 @@ contract TransactionManagerTest is Test {
         
         // After slashing below minimum stake, Alice should be removed as validator
         // So we verify she was slashed by checking she's no longer an active validator
-        assertFalse(validatorFactory.isActiveValidator(alice));
+        assertFalse(stakingManager.isActiveValidator(alice));
         
         // Verify the proposal was approved (majority voted yes)
         assertTrue(transactionManager.isProposalApproved(proposalId));

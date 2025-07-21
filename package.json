@@ -5,7 +5,19 @@
   "repository": "git@github.com:xdaniortega/simplified-consensus.git",
   "author": "Daniel Ortega <danielortegaberja@gmail.com>",
   "license": "MIT",
+  "scripts": {
+    "lint": "prettier --write 'src/**/*.sol' 'test/**/*.sol'",
+    "format": "yarn lint",
+    "format:check": "prettier --check 'src/**/*.sol' 'test/**/*.sol' '**/*.json' '**/*.md'",
+    "test": "forge test",
+    "coverage": "forge coverage --ir-minimum",
+    "build": "forge build"
+  },
   "dependencies": {
     "@openzeppelin/contracts": "^5.3.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.0.0",
+    "prettier-plugin-solidity": "^1.2.0"
   }
 }

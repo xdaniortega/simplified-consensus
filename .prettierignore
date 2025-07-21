@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+yarn.lock
+
+# Build outputs
+out/
+cache/
+artifacts/
+typechain/
+typechain-types/
+
+# Foundry
+lib/
+broadcast/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+
+# Logs
+*.log
+
+# Coverage reports
+coverage/
+lcov.info
+
+# Temporary files
+*.tmp
+*.temp 

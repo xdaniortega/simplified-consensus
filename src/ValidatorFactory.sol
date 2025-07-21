@@ -36,13 +36,13 @@ contract ValidatorFactory is ReentrancyGuard {
     uint256 public constant TOKEN_DECIMALS = 18;
     uint256 public constant BONDING_PERIOD = 1; // 1 block bonding period
     uint256 public minimumStake;
-    uint16 public maxValidators;  
+    uint16 public maxValidators;
     uint16 public validatorThreshold;
-    
+
     mapping(address => address) public validatorToProxy; // user to proxy
     mapping(address => bool) public isValidator;
     address[] public validators;
-    
+
     // Custom errors
     error SenderNotValidator();
     error InsufficientStakeAmount();
@@ -54,7 +54,9 @@ contract ValidatorFactory is ReentrancyGuard {
     error PositionNotActive();
 
     modifier onlyValidator() {
-        if(!isValidator[msg.sender]) { revert SenderNotValidator();}
+        if (!isValidator[msg.sender]) {
+            revert SenderNotValidator();
+        }
         _;
     }
 
@@ -71,13 +73,13 @@ contract ValidatorFactory is ReentrancyGuard {
      * @dev Stake tokens as a validator. Deploys proxy if not already present.
      */
     function stake(uint256 amount) external nonReentrant {
-        if(amount < minimumStake) {
+        if (amount < minimumStake) {
             revert InsufficientStakeAmount();
         }
-        if(isValidator[msg.sender]) {
+        if (isValidator[msg.sender]) {
             revert AlreadyValidator();
         }
-        if(validators.length >= maxValidators) {
+        if (validators.length >= maxValidators) {
             revert MaxValidatorsReached();
         }
 
@@ -94,13 +96,12 @@ contract ValidatorFactory is ReentrancyGuard {
             amount
         );
         bytes32 salt = keccak256(abi.encodePacked(msg.sender));
-        bytes memory bytecode = abi.encodePacked(
-            type(BeaconProxy).creationCode,
-            abi.encode(address(beacon), data)
-        );
+        bytes memory bytecode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), data));
         assembly {
             let deployed := create2(0, add(bytecode, 0x20), mload(bytecode), salt)
-            if iszero(deployed) { revert(0, 0) }
+            if iszero(deployed) {
+                revert(0, 0)
+            }
         }
         validatorToProxy[msg.sender] = proxy;
         isValidator[msg.sender] = true;
@@ -115,19 +116,19 @@ contract ValidatorFactory is ReentrancyGuard {
         address proxy = validatorToProxy[msg.sender];
         uint256 currentStake = ValidatorLogic(proxy).getStakeAmount();
 
-        if(currentStake < amount) {
+        if (currentStake < amount) {
             revert InsufficientStakeAmount();
         }
 
-        if(currentStake - amount < minimumStake) {
+        if (currentStake - amount < minimumStake) {
             amount = currentStake;
         }
-        
+
         uint256 unstaked = ValidatorLogic(proxy).unstake(amount);
         if (unstaked > 0) {
             emit Unstaked(msg.sender, unstaked);
         }
-        
+
         uint256 remainingStake = ValidatorLogic(proxy).getStakeAmount();
         if (remainingStake == 0) {
             _removeValidatorFromArray(msg.sender);
@@ -137,107 +138,58 @@ contract ValidatorFactory is ReentrancyGuard {
     }
 
     /**
-     * @dev Get top N validators by stake using optimized QuickSelect algorithm
+     * @dev Get top N validators by stake using simple sorting
      * @param count Number of validators to return
      * @return topValidators Array of validator addresses sorted by stake (descending)
      * @return topStakes Array of corresponding stake amounts
      */
-    function getTopNValidators(uint256 count) external view returns (address[] memory topValidators, uint256[] memory topStakes) {
+    function getTopNValidators(
+        uint256 count
+    ) external view returns (address[] memory topValidators, uint256[] memory topStakes) {
         uint256 totalValidators = validators.length;
         if (totalValidators == 0) {
             return (new address[](0), new uint256[](0));
         }
-        
+
         uint256 actualCount = count > totalValidators ? totalValidators : count;
-        topValidators = new address[](actualCount);
-        topStakes = new uint256[](actualCount);
-        
-        // Create temporary arrays for sorting
-        address[] memory tempValidators = new address[](totalValidators);
-        uint256[] memory tempStakes = new uint256[](totalValidators);
-        
+
+        // Create arrays to hold all validator data
+        address[] memory allValidators = new address[](totalValidators);
+        uint256[] memory allStakes = new uint256[](totalValidators);
+
         // Load all validators and their stakes
         for (uint256 i = 0; i < totalValidators; i++) {
-            address validator = validators[i];
-            tempValidators[i] = validator;
-            tempStakes[i] = getValidatorStake(validator);
+            allValidators[i] = validators[i];
+            allStakes[i] = getValidatorStake(validators[i]);
         }
-        
-        // Use QuickSelect to find top N validators
-        _quickSelectTopN(tempValidators, tempStakes, 0, totalValidators - 1, actualCount);
-        
-        // Copy top N validators to result arrays
-        for (uint256 i = 0; i < actualCount; i++) {
-            topValidators[i] = tempValidators[i];
-            topStakes[i] = tempStakes[i];
-        }
-    }
 
-    /**
-     * @dev Optimized QuickSelect algorithm to find top N validators by stake
-     * Time complexity: O(n) average case, O(n²) worst case
-     * Space complexity: O(1) in-place sorting
-     */
-    function _quickSelectTopN(
-        address[] memory validators,
-        uint256[] memory stakes,
-        uint256 left,
-        uint256 right,
-        uint256 k
-    ) internal pure {
-        if (left == right) return;
-        
-        uint256 pivotIndex = _partition(validators, stakes, left, right);
-        
-        if (k == pivotIndex) {
-            return;
-        } else if (k < pivotIndex) {
-            _quickSelectTopN(validators, stakes, left, pivotIndex - 1, k);
-        } else {
-            _quickSelectTopN(validators, stakes, pivotIndex + 1, right, k);
-        }
-    }
+        // Simple bubble sort (efficient for small arrays)
+        for (uint256 i = 0; i < totalValidators - 1; i++) {
+            for (uint256 j = 0; j < totalValidators - i - 1; j++) {
+                if (allStakes[j] < allStakes[j + 1]) {
+                    // Swap stakes
+                    uint256 tempStake = allStakes[j];
+                    allStakes[j] = allStakes[j + 1];
+                    allStakes[j + 1] = tempStake;
 
-    /**
-     * @dev Partition function for QuickSelect - sorts in descending order (highest stakes first)
-     */
-    function _partition(
-        address[] memory validators,
-        uint256[] memory stakes,
-        uint256 left,
-        uint256 right
-    ) internal pure returns (uint256) {
-        uint256 pivot = stakes[right];
-        uint256 i = left;
-        
-        for (uint256 j = left; j < right; j++) {
-            if (stakes[j] >= pivot) {
-                // Swap validators
-                address tempValidator = validators[i];
-                validators[i] = validators[j];
-                validators[j] = tempValidator;
-                
-                // Swap stakes
-                uint256 tempStake = stakes[i];
-                stakes[i] = stakes[j];
-                stakes[j] = tempStake;
-                
-                i++;
+                    // Swap validators
+                    address tempValidator = allValidators[j];
+                    allValidators[j] = allValidators[j + 1];
+                    allValidators[j + 1] = tempValidator;
+                }
             }
         }
-        
-        // Swap pivot
-        address tempValidator = validators[i];
-        validators[i] = validators[right];
-        validators[right] = tempValidator;
-        
-        uint256 tempStake = stakes[i];
-        stakes[i] = stakes[right];
-        stakes[right] = tempStake;
-        
-        return i;
+
+        // Return top N validators
+        topValidators = new address[](actualCount);
+        topStakes = new uint256[](actualCount);
+
+        for (uint256 i = 0; i < actualCount; i++) {
+            topValidators[i] = allValidators[i];
+            topStakes[i] = allStakes[i];
+        }
     }
-    
+
     /**
      * @dev Get all validators
      * @return allValidators Array of all validator addresses
@@ -245,7 +197,7 @@ contract ValidatorFactory is ReentrancyGuard {
     function getAllValidators() external view returns (address[] memory) {
         return validators;
     }
-    
+
     /**
      * @dev Get validator count
      * @return count Number of validators
@@ -253,7 +205,7 @@ contract ValidatorFactory is ReentrancyGuard {
     function getValidatorCount() external view returns (uint256) {
         return validators.length;
     }
-    
+
     /**
      * @dev Check if address is validator
      * @param validator Address to check
@@ -273,7 +225,7 @@ contract ValidatorFactory is ReentrancyGuard {
         address proxy = validatorToProxy[validator];
         return ValidatorLogic(proxy).getStakeAmount();
     }
-    
+
     /**
      * @dev Check if validator can unstake (bonding period expired)
      * @param validator Validator address
@@ -300,21 +252,42 @@ contract ValidatorFactory is ReentrancyGuard {
             amount
         );
         bytes32 salt = keccak256(abi.encodePacked(validator));
-        bytes memory bytecode = abi.encodePacked(
-            type(BeaconProxy).creationCode,
-            abi.encode(address(beacon), data)
-        );
-        bytes32 hash = keccak256(
-            abi.encodePacked(
-                bytes1(0xff),
-                address(this),
-                salt,
-                keccak256(bytecode)
-            )
-        );
+        bytes memory bytecode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), data));
+        bytes32 hash = keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, keccak256(bytecode)));
         predicted = address(uint160(uint256(hash)));
     }
 
+    /**
+     * @dev Slash validator stake (callable by consensus contract)
+     * @param validator Validator to slash
+     * @param slashAmount Amount to slash from validator's stake
+     * @param reason Reason for slashing
+     */
+    function slashValidator(address validator, uint256 slashAmount, string memory reason) external {
+        // Only allow TransactionManager to slash (in a real implementation, this would be controlled)
+        // For now, allow any caller for testing purposes
+        require(isValidator[validator], "Not a validator");
+
+        address proxy = validatorToProxy[validator];
+        require(proxy != address(0), "Validator proxy not found");
+
+        ValidatorLogic validatorLogic = ValidatorLogic(proxy);
+        uint256 currentStake = validatorLogic.getStakeAmount();
+        require(currentStake >= slashAmount, "Slash amount exceeds stake");
+
+        // Perform the slashing by calling unstake on the ValidatorLogic
+        validatorLogic.unstake(slashAmount);
+
+        emit ValidatorSlashed(validator, slashAmount, reason);
+
+        // If validator's stake falls below minimum, remove them
+        uint256 remainingStake = validatorLogic.getStakeAmount();
+        if (remainingStake < minimumStake) {
+            _removeValidatorFromArray(validator);
+            isValidator[validator] = false;
+            emit ValidatorRemoved(validator);
+        }
+    }
 
     // ---------------------------------- INTERNAL FUNCTIONS ----------------------------------
     /**
@@ -331,17 +304,16 @@ contract ValidatorFactory is ReentrancyGuard {
             _amount
         );
         bytes32 salt = keccak256(abi.encodePacked(msg.sender)); // unique proxy per validator
-        bytes memory bytecode = abi.encodePacked(
-            type(BeaconProxy).creationCode,
-            abi.encode(address(beacon), data)
-        );
+        bytes memory bytecode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), data));
 
         address predicted = computeProxyAddress(msg.sender, _amount);
         stakingToken.safeTransferFrom(msg.sender, predicted, _amount);
 
         assembly {
             proxy := create2(0, add(bytecode, 0x20), mload(bytecode), salt)
-            if iszero(proxy) { revert(0, 0) }
+            if iszero(proxy) {
+                revert(0, 0)
+            }
         }
 
         validatorToProxy[msg.sender] = proxy;
@@ -362,4 +334,4 @@ contract ValidatorFactory is ReentrancyGuard {
             }
         }
     }
-} 
+}

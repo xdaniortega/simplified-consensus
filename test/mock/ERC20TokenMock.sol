@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract ERC20TokenMock is ERC20, Ownable {
     constructor() ERC20("Mock Token", "MTK") Ownable(msg.sender) {
         // Mint initial supply to deployer
-        _mint(msg.sender, 1000000 * 10**decimals());
+        _mint(msg.sender, 1000000 * 10 ** decimals());
     }
 
     /**
@@ -22,4 +22,4 @@ contract ERC20TokenMock is ERC20, Ownable {
     function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
     }
-} 
+}

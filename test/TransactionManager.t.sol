@@ -187,7 +187,7 @@ contract TransactionManagerTest is Test {
 
     function test_RevertWhen_SubmitProposal_EmptyTransaction() public {
         vm.prank(proposer);
-        vm.expectRevert("Empty transaction");
+        vm.expectRevert(TransactionManager.EmptyTransaction.selector);
         transactionManager.submitProposal("");
     }
 
@@ -197,7 +197,7 @@ contract TransactionManagerTest is Test {
         transactionManager.submitProposal(TEST_TRANSACTION);
 
         // Try to submit same proposal again
-        vm.expectRevert("Proposal already exists");
+        vm.expectRevert(TransactionManager.ProposalAlreadyExists.selector);
         transactionManager.submitProposal(TEST_TRANSACTION);
 
         vm.stopPrank();
@@ -259,7 +259,7 @@ contract TransactionManagerTest is Test {
         bytes memory invalidSignature = abi.encodePacked(bytes32(0), bytes32(0), uint8(27));
 
         vm.prank(validator1);
-        vm.expectRevert("Invalid signature");
+        vm.expectRevert(TransactionManager.InvalidSignature.selector);
         transactionManager.signProposal(proposalId, invalidSignature);
     }
 
@@ -281,7 +281,7 @@ contract TransactionManagerTest is Test {
         vm.startPrank(validator1);
         transactionManager.signProposal(proposalId, signature);
 
-        vm.expectRevert("Already signed");
+        vm.expectRevert(TransactionManager.AlreadySigned.selector);
         transactionManager.signProposal(proposalId, signature);
         vm.stopPrank();
     }
@@ -358,7 +358,7 @@ contract TransactionManagerTest is Test {
         // Don't get optimistic approval
 
         vm.prank(validator1);
-        vm.expectRevert("Cannot challenge");
+        vm.expectRevert(TransactionManager.InvalidProposalState.selector);
         transactionManager.challengeProposal(proposalId);
     }
 
@@ -371,7 +371,7 @@ contract TransactionManagerTest is Test {
         vm.roll(block.number + 11);
 
         vm.prank(validator1);
-        vm.expectRevert("Challenge period expired");
+        vm.expectRevert(TransactionManager.ChallengePeriodExpired.selector);
         transactionManager.challengeProposal(proposalId);
     }
 
@@ -440,7 +440,7 @@ contract TransactionManagerTest is Test {
         bytes memory voteSignature = abi.encodePacked(r, s, v);
 
         vm.prank(validator1);
-        vm.expectRevert("Not in voting period");
+        vm.expectRevert(TransactionManager.InvalidProposalState.selector);
         transactionManager.submitVote(proposalId, support, voteSignature);
     }
 
@@ -465,7 +465,7 @@ contract TransactionManagerTest is Test {
         bytes memory voteSignature = abi.encodePacked(r, s, v);
 
         vm.prank(validator2);
-        vm.expectRevert("Already voted");
+        vm.expectRevert(TransactionManager.AlreadyVoted.selector);
         transactionManager.submitVote(proposalId, false, voteSignature);
     }
 
@@ -601,7 +601,7 @@ contract TransactionManagerTest is Test {
         _signProposalWithValidators(proposalId, TEST_TRANSACTION, 3);
 
         // Try to finalize before challenge period ends
-        vm.expectRevert("Challenge period not ended");
+        vm.expectRevert(TransactionManager.ChallengePeriodNotEnded.selector);
         transactionManager.finalizeProposal(proposalId);
     }
 
@@ -615,7 +615,7 @@ contract TransactionManagerTest is Test {
 
         vm.roll(block.number + 11);
 
-        vm.expectRevert("Use resolveChallenge for voting proposals");
+        vm.expectRevert(TransactionManager.UseResolveChallengeForVotingProposals.selector);
         transactionManager.finalizeProposal(proposalId);
     }
 
@@ -738,7 +738,7 @@ contract TransactionManagerTest is Test {
         transactionManager.challengeProposal(proposalId);
 
         // Try to resolve before voting period ends
-        vm.expectRevert("Voting period not ended");
+        vm.expectRevert(TransactionManager.VotingPeriodNotEnded.selector);
         transactionManager.resolveChallenge(proposalId);
     }
 
@@ -747,7 +747,7 @@ contract TransactionManagerTest is Test {
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
         // Try to finalize before optimistic approval
-        vm.expectRevert("Invalid proposal state for finalization");
+        vm.expectRevert(TransactionManager.InvalidProposalStateForFinalization.selector);
         transactionManager.finalizeProposal(proposalId);
     }
 
@@ -800,7 +800,7 @@ contract TransactionManagerTest is Test {
         assertFalse(transactionManager.isInVotingPeriod(proposalId));
 
         // Try to vote after period ends
-        vm.expectRevert("Voting period expired");
+        vm.expectRevert(TransactionManager.VotingPeriodExpired.selector);
         _submitVote(proposalId, validator2, true);
     }
 

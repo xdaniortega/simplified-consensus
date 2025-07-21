@@ -18,7 +18,6 @@ import "./ValidatorLogic.sol";
  */
 contract ValidatorFactory is ReentrancyGuard {
     using SafeERC20 for IERC20;
-    // Events
     event ValidatorCreated(address indexed validator, address indexed proxy, uint256 stake);
     event ValidatorRemoved(address indexed validator);
     event ConsensusModuleUpdated(address indexed oldModule, address indexed newModule);
@@ -29,7 +28,18 @@ contract ValidatorFactory is ReentrancyGuard {
     event StakingPositionCreated(address indexed validator, uint256 positionId, uint256 amount);
     event StakingPositionClosed(address indexed validator, uint256 positionId, uint256 amount);
 
-    // State variables
+    error SenderNotValidator();
+    error InsufficientStakeAmount();
+    error AlreadyValidator();
+    error MaxValidatorsReached();
+    error TransferFailed();
+    error AmountExceedsTotalStake();
+    error PositionNotFound();
+    error PositionNotActive();
+    error NotAValidator();
+    error ValidatorProxyNotFound();
+    error SlashAmountExceedsStake();
+
     UpgradeableBeacon public beacon;
     IERC20 public stakingToken;
     uint256 public constant WITHDRAW_COOLDOWN_PERIOD = 1 days;
@@ -42,16 +52,6 @@ contract ValidatorFactory is ReentrancyGuard {
     mapping(address => address) public validatorToProxy; // user to proxy
     mapping(address => bool) public isValidator;
     address[] public validators;
-
-    // Custom errors
-    error SenderNotValidator();
-    error InsufficientStakeAmount();
-    error AlreadyValidator();
-    error MaxValidatorsReached();
-    error TransferFailed();
-    error AmountExceedsTotalStake();
-    error PositionNotFound();
-    error PositionNotActive();
 
     modifier onlyValidator() {
         if (!isValidator[msg.sender]) {
@@ -254,14 +254,14 @@ contract ValidatorFactory is ReentrancyGuard {
     function slashValidator(address validator, uint256 slashAmount, string memory reason) external {
         // Only allow TransactionManager to slash (in a real implementation, this would be controlled)
         // For now, allow any caller for testing purposes
-        require(isValidator[validator], "Not a validator");
+        if (!isValidator[validator]) revert NotAValidator();
 
         address proxy = validatorToProxy[validator];
-        require(proxy != address(0), "Validator proxy not found");
+        if (proxy == address(0)) revert ValidatorProxyNotFound();
 
         ValidatorLogic validatorLogic = ValidatorLogic(proxy);
         uint256 currentStake = validatorLogic.getStakeAmount();
-        require(currentStake >= slashAmount, "Slash amount exceeds stake");
+        if (currentStake < slashAmount) revert SlashAmountExceedsStake();
 
         // Perform the slashing by calling unstake on the ValidatorLogic
         validatorLogic.unstake(slashAmount);

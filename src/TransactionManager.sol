@@ -16,7 +16,6 @@ import "./interfaces/ILLMOracle.sol";
  * - Slashing mechanism for false challenges
  */
 contract TransactionManager {
-    // Events
     event ProposalSubmitted(bytes32 indexed proposalId, string transaction, address indexed submitter);
     event ProposalOptimisticallyApproved(bytes32 indexed proposalId);
     event ProposalChallenged(bytes32 indexed proposalId, address indexed challenger);
@@ -27,7 +26,28 @@ contract TransactionManager {
     event ChallengeResolved(bytes32 indexed proposalId, bool approved, uint256 yesVotes, uint256 noVotes);
     event ValidatorSlashed(bytes32 indexed proposalId, address indexed challenger, uint256 amount, bool wasHonest);
 
-    // State variables
+    error InvalidValidatorFactory();
+    error InvalidLLMOracle();
+    error EmptyTransaction();
+    error ProposalAlreadyExists();
+    error ChallengePeriodExpired();
+    error NotEnoughValidators();
+    error NotAValidator();
+    error AlreadyVoted();
+    error InvalidSignature();
+    error ChallengePeriodNotEnded();
+    error UseResolveChallengeForVotingProposals();
+    error InvalidProposalStateForFinalization();
+    error VotingPeriodNotEnded();
+    error InvalidProposalState();
+    error ProposalNotFound();
+    error NotASelectedValidator();
+    error AlreadySigned();
+    error VotingPeriodExpired();
+    error NotInVotingPeriod();
+    error InvalidSignatureLength();
+    error InvalidSignatureV();
+
     ValidatorFactory public validatorFactory;
     ILLMOracle public llmOracle;
 
@@ -39,14 +59,12 @@ contract TransactionManager {
     mapping(bytes32 => address[]) public proposalVoters;
     uint256 public proposalCount;
 
-    // Constants
     uint256 public constant CHALLENGE_PERIOD = 10; // blocks - as per requirement
     uint256 public constant VOTING_PERIOD = 30; // blocks for voting after challenge
     uint256 public constant REQUIRED_SIGNATURES = 3; // 3 out of 5 validators
     uint256 public constant VALIDATOR_SET_SIZE = 5; // top 5 validators for consensus
     uint256 public constant SLASH_PERCENTAGE = 10; // 10% slash for false challenges
 
-    // Proposal states
     enum ProposalState {
         Proposed, // Just submitted
         OptimisticApproved, // Enough signatures, optimistically approved
@@ -56,7 +74,6 @@ contract TransactionManager {
         Reverted // Proposal was invalid/rejected
     }
 
-    // Structs
     struct Proposal {
         bytes32 proposalId;
         string transaction;
@@ -75,8 +92,8 @@ contract TransactionManager {
     }
 
     constructor(address _validatorFactory, address _llmOracle) {
-        require(_validatorFactory != address(0), "Invalid validator factory");
-        require(_llmOracle != address(0), "Invalid LLM oracle");
+        if (_validatorFactory == address(0)) revert InvalidValidatorFactory();
+        if (_llmOracle == address(0)) revert InvalidLLMOracle();
 
         validatorFactory = ValidatorFactory(_validatorFactory);
         llmOracle = ILLMOracle(_llmOracle);
@@ -88,14 +105,14 @@ contract TransactionManager {
      * @return proposalId Unique identifier for the proposal
      */
     function submitProposal(string calldata transaction) external returns (bytes32 proposalId) {
-        require(bytes(transaction).length > 0, "Empty transaction");
+        if (bytes(transaction).length == 0) revert EmptyTransaction();
 
         proposalId = keccak256(abi.encodePacked(transaction, block.timestamp, msg.sender));
-        require(proposals[proposalId].proposalId == bytes32(0), "Proposal already exists");
+        if (proposals[proposalId].proposalId != bytes32(0)) revert ProposalAlreadyExists();
 
         // Get top validators for this proposal
         address[] memory topValidators = _getTopValidators();
-        require(topValidators.length >= REQUIRED_SIGNATURES, "Not enough validators");
+        if (topValidators.length < REQUIRED_SIGNATURES) revert NotEnoughValidators();
 
         // Perform LLM validation using external oracle
         bool llmResult = llmOracle.validateTransaction(transaction);
@@ -132,18 +149,18 @@ contract TransactionManager {
      */
     function signProposal(bytes32 proposalId, bytes calldata signature) external {
         Proposal storage proposal = proposals[proposalId];
-        require(proposal.proposalId != bytes32(0), "Proposal not found");
-        require(proposal.state == ProposalState.Proposed, "Invalid proposal state");
-        require(block.number <= proposal.challengeDeadline, "Challenge period expired");
-        require(!hasValidatorSigned[proposalId][msg.sender], "Already signed");
+        if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
+        if (proposal.state != ProposalState.Proposed) revert InvalidProposalState();
+        if (block.number > proposal.challengeDeadline) revert ChallengePeriodExpired();
+        if (hasValidatorSigned[proposalId][msg.sender]) revert AlreadySigned();
 
         // Verify that sender is one of the selected validators for this proposal
-        require(_isSelectedValidator(proposalId, msg.sender), "Not a selected validator");
+        if (!_isSelectedValidator(proposalId, msg.sender)) revert NotASelectedValidator();
 
         // Verify the signature
         bytes32 messageHash = _getProposalHash(proposalId, proposal.transaction);
         address recoveredSigner = _recoverSigner(messageHash, signature);
-        require(recoveredSigner == msg.sender, "Invalid signature");
+        if (recoveredSigner != msg.sender) revert InvalidSignature();
 
         // Record the signature
         hasValidatorSigned[proposalId][msg.sender] = true;
@@ -166,10 +183,10 @@ contract TransactionManager {
      */
     function challengeProposal(bytes32 proposalId) external {
         Proposal storage proposal = proposals[proposalId];
-        require(proposal.proposalId != bytes32(0), "Proposal not found");
-        require(proposal.state == ProposalState.OptimisticApproved, "Cannot challenge");
-        require(block.number <= proposal.challengeDeadline, "Challenge period expired");
-        require(validatorFactory.isActiveValidator(msg.sender), "Not a validator");
+        if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
+        if (proposal.state != ProposalState.OptimisticApproved) revert InvalidProposalState();
+        if (block.number > proposal.challengeDeadline) revert ChallengePeriodExpired();
+        if (!validatorFactory.isActiveValidator(msg.sender)) revert NotAValidator();
 
         proposal.state = ProposalState.Voting;
         proposal.challenger = msg.sender;
@@ -187,16 +204,16 @@ contract TransactionManager {
      */
     function submitVote(bytes32 proposalId, bool support, bytes calldata signature) external {
         Proposal storage proposal = proposals[proposalId];
-        require(proposal.proposalId != bytes32(0), "Proposal not found");
-        require(proposal.state == ProposalState.Voting, "Not in voting period");
-        require(block.number <= proposal.votingDeadline, "Voting period expired");
-        require(validatorFactory.isActiveValidator(msg.sender), "Not a validator");
-        require(!hasValidatorVoted[proposalId][msg.sender], "Already voted");
+        if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
+        if (proposal.state != ProposalState.Voting) revert InvalidProposalState();
+        if (block.number > proposal.votingDeadline) revert VotingPeriodExpired();
+        if (!validatorFactory.isActiveValidator(msg.sender)) revert NotAValidator();
+        if (hasValidatorVoted[proposalId][msg.sender]) revert AlreadyVoted();
 
         // Verify the vote signature
         bytes32 voteHash = _getVoteHash(proposalId, support);
         address recoveredSigner = _recoverSigner(voteHash, signature);
-        require(recoveredSigner == msg.sender, "Invalid vote signature");
+        if (recoveredSigner != msg.sender) revert InvalidSignature();
 
         // Record the vote
         hasValidatorVoted[proposalId][msg.sender] = true;
@@ -218,9 +235,9 @@ contract TransactionManager {
      */
     function resolveChallenge(bytes32 proposalId) external {
         Proposal storage proposal = proposals[proposalId];
-        require(proposal.proposalId != bytes32(0), "Proposal not found");
-        require(proposal.state == ProposalState.Voting, "Not in voting state");
-        require(block.number > proposal.votingDeadline, "Voting period not ended");
+        if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
+        if (proposal.state != ProposalState.Voting) revert InvalidProposalState();
+        if (block.number <= proposal.votingDeadline) revert VotingPeriodNotEnded();
 
         uint256 totalVotes = proposal.yesVotes + proposal.noVotes;
         bool approved = false;
@@ -254,21 +271,21 @@ contract TransactionManager {
      */
     function finalizeProposal(bytes32 proposalId) external {
         Proposal storage proposal = proposals[proposalId];
-        require(proposal.proposalId != bytes32(0), "Proposal not found");
+        if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
 
         bool approved = false;
 
         if (proposal.state == ProposalState.OptimisticApproved) {
-            require(block.number > proposal.challengeDeadline, "Challenge period not ended");
+            if (block.number <= proposal.challengeDeadline) revert ChallengePeriodNotEnded();
             // No challenge during period - approve
             approved = true;
             proposal.executed = true;
             proposal.state = ProposalState.Finalized;
         } else if (proposal.state == ProposalState.Voting) {
             // Should use resolveChallenge instead
-            revert("Use resolveChallenge for voting proposals");
+            revert UseResolveChallengeForVotingProposals();
         } else {
-            revert("Invalid proposal state for finalization");
+            revert InvalidProposalStateForFinalization();
         }
 
         emit ProposalFinalized(proposalId, approved);
@@ -363,7 +380,7 @@ contract TransactionManager {
      * @return signer Recovered signer address
      */
     function _recoverSigner(bytes32 messageHash, bytes memory signature) internal pure returns (address) {
-        require(signature.length == 65, "Invalid signature length");
+        if (signature.length != 65) revert InvalidSignatureLength();
 
         bytes32 r;
         bytes32 s;
@@ -379,7 +396,7 @@ contract TransactionManager {
             v += 27;
         }
 
-        require(v == 27 || v == 28, "Invalid signature v value");
+        if (v != 27 && v != 28) revert InvalidSignatureV();
 
         return ecrecover(messageHash, v, r, s);
     }

@@ -4,7 +4,8 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./ValidatorLogic.sol";
 
 /**
@@ -16,6 +17,7 @@ import "./ValidatorLogic.sol";
  *      Manages staking positions for granular stake tracking.
  */
 contract ValidatorFactory is ReentrancyGuard {
+    using SafeERC20 for IERC20;
     // Events
     event ValidatorCreated(address indexed validator, address indexed proxy, uint256 stake);
     event ValidatorRemoved(address indexed validator);
@@ -41,6 +43,7 @@ contract ValidatorFactory is ReentrancyGuard {
     mapping(address => bool) public isValidator;
     address[] public validators;
 
+    // Custom errors
     error SenderNotValidator();
     error InsufficientStakeAmount();
     error AlreadyValidator();
@@ -65,188 +68,64 @@ contract ValidatorFactory is ReentrancyGuard {
     }
 
     /**
-     * @dev Create a new validator
-     * @return proxy Address of the created proxy
+     * @dev Stake tokens as a validator. Deploys proxy if not already present.
      */
-    function registerValidator(uint256 amount) external nonReentrant returns (address proxy) {
-        if(amount < minimumStake) {
-            revert InsufficientStakeAmount();
-        }
-        if(isValidator[msg.sender]) {
-            revert AlreadyValidator();
-        }
-        if(validators.length >= maxValidators) {
-            revert MaxValidatorsReached();
-        }
-        if(!stakingToken.safeTransferFrom(msg.sender, address(this), amount)) { //TODO: CREATE2
-            revert TransferFailed();
-        }
+    function stake(uint256 amount) external nonReentrant {
+        require(amount >= minimumStake, "Stake below minimum");
+        require(!isValidator[msg.sender], "Already validator");
+        require(validators.length < maxValidators, "Max validators reached");
 
-        proxy = _registerValidator(amount);
+        // Compute proxy address
+        address proxy = computeProxyAddress(msg.sender, amount);
+        // Pre-fund the proxy
+        require(stakingToken.transferFrom(msg.sender, proxy, amount), "Transfer failed");
 
+        // Deploy proxy with CREATE2
+        bytes memory data = abi.encodeWithSelector(
+            ValidatorLogic.initialize.selector,
+            msg.sender,
+            address(stakingToken),
+            amount
+        );
+        bytes32 salt = keccak256(abi.encodePacked(msg.sender));
+        bytes memory bytecode = abi.encodePacked(
+            type(BeaconProxy).creationCode,
+            abi.encode(address(beacon), data)
+        );
+        assembly {
+            let deployed := create2(0, add(bytecode, 0x20), mload(bytecode), salt)
+            if iszero(deployed) { revert(0, 0) }
+        }
+        validatorToProxy[msg.sender] = proxy;
+        isValidator[msg.sender] = true;
+        validators.push(msg.sender);
         emit ValidatorCreated(msg.sender, proxy, amount);
     }
 
     /**
-     * @dev Create a new staking position for a validator
-     * @param amount Amount to stake
-     * @param description Description for the position
-     * @return positionId ID of the created position
+     * @dev Unstake tokens as a validator. If the remaining stake is below minimum, remove validator and recursively unstake the rest.
      */
-    function createStakingPosition(uint256 amount, string memory description) external nonReentrant onlyValidator returns (uint256 positionId) {
-        if(amount == 0) {
-            revert InsufficientStakeAmount();
-        }
-        
+    function unstake(uint256 amount) external nonReentrant onlyValidator {
         address proxy = validatorToProxy[msg.sender];
-        
-        // Transfer tokens to factory first
-        if(!stakingToken.safeTransferFrom(msg.sender, address(this), amount)) {
-            revert TransferFailed();
+        uint256 unstaked = ValidatorLogic(proxy).unstake(amount);
+        require(stakingToken.transfer(msg.sender, unstaked), "Transfer failed");
+        emit Unstaked(msg.sender, unstaked);
+
+        uint256 remainingStake = ValidatorLogic(proxy).getStakeAmount();
+        if (remainingStake < minimumStake && remainingStake > 0) {
+            // Unstake the residual below minimum
+            uint256 residual = remainingStake;
+            uint256 unstakedResidual = ValidatorLogic(proxy).unstake(residual);
+            require(stakingToken.transfer(msg.sender, unstakedResidual), "Transfer failed");
+            emit Unstaked(msg.sender, unstakedResidual);
+            remainingStake = 0;
         }
-        
-        // Transfer to proxy
-        stakingToken.safeTransfer(proxy, amount);
-        
-        // Create position
-        positionId = ValidatorLogic(proxy).createStakingPosition(amount, description);
-        
-        emit StakingPositionCreated(msg.sender, positionId, amount, description);
-        return positionId;
-    }
-
-    /**
-     * @dev Increase stake in an existing position
-     * @param positionId ID of the position to increase
-     * @param amount Amount to add
-     * @return newAmount New total amount in the position
-     */
-    function increasePositionStake(uint256 positionId, uint256 amount) external nonReentrant onlyValidator returns (uint256 newAmount) {
-        if(amount == 0) {
-            revert InsufficientStakeAmount();
-        }
-        
-        address proxy = validatorToProxy[msg.sender];
-        
-        // Transfer tokens to factory first
-        if(!stakingToken.safeTransferFrom(msg.sender, address(this), amount)) {
-            revert TransferFailed();
-        }
-        
-        // Transfer to proxy
-        stakingToken.safeTransfer(proxy, amount);
-        
-        // Increase position stake
-        newAmount = ValidatorLogic(proxy).increasePositionStake(positionId, amount);
-        
-        uint256 totalStake = getValidatorStake(msg.sender);
-        emit StakeUpdated(msg.sender, totalStake - amount, totalStake);
-        
-        return newAmount;
-    }
-
-    /**
-     * @dev Close a staking position (partial unstake)
-     * @param positionId ID of the position to close
-     * @return amount Amount that was in the position
-     */
-    function closeStakingPosition(uint256 positionId) external nonReentrant onlyValidator returns (uint256 amount) {
-        address proxy = validatorToProxy[msg.sender];
-        
-        // Close position
-        amount = ValidatorLogic(proxy).closeStakingPosition(positionId);
-        
-        // Transfer tokens back to validator
-        stakingToken.safeTransfer(msg.sender, amount);
-        
-        emit StakingPositionClosed(msg.sender, positionId, amount);
-        emit Unstaked(msg.sender, amount);
-        
-        return amount;
-    }
-
-    /**
-     * @dev Get all active positions for a validator
-     * @param validator Validator address
-     * @return positions Array of active position IDs
-     */
-    function getValidatorActivePositions(address validator) external view returns (uint256[] memory positions) {
-        if(!isValidator[validator]) {
-            return new uint256[](0);
-        }
-        
-        address proxy = validatorToProxy[validator];
-        return ValidatorLogic(proxy).getValidatorActivePositions(validator);
-    }
-
-    /**
-     * @dev Get position details
-     * @param validator Validator address
-     * @param positionId ID of the position
-     * @return position StakingPosition struct
-     */
-    function getStakingPosition(address validator, uint256 positionId) external view returns (ValidatorLogic.StakingPosition memory position) {
-        if(!isValidator[validator]) {
-            revert PositionNotFound();
-        }
-        
-        address proxy = validatorToProxy[validator];
-        return ValidatorLogic(proxy).getStakingPosition(positionId);
-    }
-
-    function increaseStake(uint256 amount) external nonReentrant onlyValidator {
-        uint256 totalStake = getValidatorStake(msg.sender);
-        address proxy = validatorToProxy[msg.sender];
-        
-        uint256 stakedAmount = ValidatorLogic(proxy).stake(amount);
-
-        emit StakeUpdated(msg.sender, totalStake, totalStake + stakedAmount);
-    }
-
-    function decreaseStake(uint256 amount) external nonReentrant onlyValidator {
-        uint256 totalStake = getValidatorStake(msg.sender);
-        address proxy = validatorToProxy[msg.sender];
-
-        if(amount > totalStake) {
-            revert AmountExceedsTotalStake();
-        }
-
-        (uint256 unstakedAmount, bool shouldRemove) = ValidatorLogic(proxy).unstake(amount);
-
-        if(shouldRemove) {
+        if (remainingStake == 0) {
             _removeValidatorFromArray(msg.sender);
             isValidator[msg.sender] = false;
             emit ValidatorRemoved(msg.sender);
         }
-        emit Unstaked(msg.sender, unstakedAmount);
     }
-
-    /**
-     * @dev Slash validator stake (for malicious behavior)
-     * @param validator Validator to slash
-     * @param amount Amount to slash
-     * @param reason Reason for slashing
-     */
-    function slashValidator(address validator, uint256 amount, string memory reason) external onlyConsensusModule {
-        if (!isValidator[validator]) {
-            revert SenderNotValidator();
-        }
-        
-        address proxy = validatorToProxy[validator];
-        uint256 currentStake = getValidatorStake(validator);
-        
-        if (amount > currentStake) {
-            amount = currentStake; // Slash entire stake if amount exceeds
-        }
-        
-        ValidatorLogic(proxy).slashStake(amount);
-        
-        // Transfer slashed tokens to consensus module
-        stakingToken.safeTransfer(consensusModule, amount);
-        
-        emit ValidatorSlashed(validator, amount, reason);
-    }
-
 
     /**
      * @dev Get top N validators by stake using optimized QuickSelect algorithm
@@ -351,15 +230,6 @@ contract ValidatorFactory is ReentrancyGuard {
     }
 
     /**
-     * @dev Get top N validators by stake (simplified version for backward compatibility)
-     * @param count Number of validators to return
-     * @return topValidators Array of validator addresses
-     */
-    function getTopNValidatorsSimple(uint256 count) external view returns (address[] memory topValidators) {
-        (topValidators, ) = getTopNValidators(count);
-    }
-
-    /**
      * @dev Get all validators
      * @return allValidators Array of all validator addresses
      */
@@ -389,7 +259,7 @@ contract ValidatorFactory is ReentrancyGuard {
      * @param validator Validator address
      * @return stakeAmount Stake amount
      */
-    function getValidatorStake(address validator) external view returns (uint256) {
+    function getValidatorStake(address validator) public view returns (uint256) {
         if (!isValidator[validator]) return 0;
         address proxy = validatorToProxy[validator];
         return ValidatorLogic(proxy).getStakeAmount();
@@ -457,7 +327,7 @@ contract ValidatorFactory is ReentrancyGuard {
             abi.encode(address(beacon), data)
         );
 
-        address predicted = computeProxyAddress(msg.sender);
+        address predicted = computeProxyAddress(msg.sender, _amount);
         stakingToken.safeTransferFrom(msg.sender, predicted, _amount);
 
         assembly {

@@ -7,7 +7,7 @@ optimizer_runs = 200
 
 # Remappings for OpenZeppelin contracts
 remappings = [
-    "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
+    "@openzeppelin/=node_modules/@openzeppelin/",
     "forge-std/=lib/forge-std/src/"
 ]
 

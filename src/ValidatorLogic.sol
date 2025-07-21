@@ -26,6 +26,7 @@ contract ValidatorLogic {
     error AlreadyInitialized();
     error InvalidOwner();
     error InsufficientStakeAmount();
+    error InvalidAmount();
 
     bytes32 private constant VALIDATOR_OWNER_SLOT = keccak256("validator.owner"); // address
     bytes32 private constant TOKEN_SLOT = keccak256("token"); // address
@@ -90,39 +91,15 @@ contract ValidatorLogic {
         emit ValidatorInitialized(_owner, _token, _stakeAmount);
     }
 
-    /**
-     * @dev Create a new staking position
-     * @param amount Amount to stake
-     * @param description Optional description for the stake
-     * @return positionId ID of the created position
-     */
-    function createStakingPosition(uint256 amount, string memory description) external onlyFactory returns (uint256 positionId) {
-        if(!StorageSlot.getBooleanSlot(IS_ACTIVE_SLOT).value) {
-            revert ValidatorNotActive();
-        }
-        
-        positionId = _createStakingPosition(StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value, amount, description);
-        
-        // Update total stake
-        uint256 currentStake = StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
-        StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value = currentStake + amount;
-        
-        emit StakeIncreased(StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value, amount, currentStake + amount);
-        return positionId;
-    }
 
     /**
-     * @dev Increase validator stake (legacy function for backward compatibility)
+     * @dev Increase validator stake
      * @param amount Amount to stake
      * @return stakedAmount Amount actually staked
      */
     function stake(uint256 amount) external onlyFactory returns (uint256 stakedAmount) {
-        if(amount == 0) {
-            revert InvalidAmount();
-        }
-        if(!StorageSlot.getBooleanSlot(IS_ACTIVE_SLOT).value) {
-            revert ValidatorNotActive();
-        }
+        if(amount == 0) revert InvalidAmount();
+        if(!StorageSlot.getBooleanSlot(IS_ACTIVE_SLOT).value) revert ValidatorNotActive();
         
         // Create new position
         uint256 positionId = _createStakingPosition(StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value, amount, "Legacy stake");
@@ -145,9 +122,7 @@ contract ValidatorLogic {
     function unstake(uint256 amount) external onlyFactory returns (uint256 totalUnstaked) {
         uint256 stakeSlot = StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
 
-        if (amount > stakeSlot) {
-            revert InsufficientStakeAmount();
-        }
+        if (amount > stakeSlot) revert InsufficientStakeAmount();
 
         totalUnstaked = _unstake(getValidatorOwner(), amount, stakeSlot);
         // Update total stake
@@ -277,7 +252,7 @@ contract ValidatorLogic {
      * @dev Get validator owner
      * @return owner Validator owner address
      */
-    function getValidatorOwner() external view returns (address) {
+    function getValidatorOwner() public view returns (address) {
         return StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value;
     }
 
@@ -306,7 +281,7 @@ contract ValidatorLogic {
      * @param description Position description
      * @return positionId ID of the created position
      */
-    function _createStakingPosition(address owner, uint256 amount, string memory description) internal returns (uint256 positionId) {
+    function _createStakingPosition(address owner, uint256 amount) internal returns (uint256 positionId) {
         uint256 total = getTotalPositions();
         positionId = total + 1;
         setTotalPositions(positionId);
@@ -316,8 +291,7 @@ contract ValidatorLogic {
             amount: amount,
             timestamp: block.timestamp,
             bondingBlock: block.number,
-            lastWithdrawalTimestamp: block.timestamp,
-            description: description
+            lastWithdrawalTimestamp: block.timestamp
         });
 
         setStakingPosition(positionId, position);

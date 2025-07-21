@@ -3,101 +3,67 @@ pragma solidity ^0.8.20;
 
 import "./ValidatorFactory.sol";
 import "./interfaces/ILLMOracle.sol";
+import "./interfaces/IConsensusProvider.sol";
+import "./ConsensusManager.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title TransactionManager
- * @dev Optimistic consensus system with LLM validation and validator signatures
- * Features:
- * - Transaction proposal with optimistic execution
- * - External LLM Oracle for validation
- * - ECDSA signature verification with 3/5 consensus
- * - Challenge period for disputes
- * - Dispute resolution with validator voting
- * - Slashing mechanism for false challenges
+ * @dev Simplified TransactionManager that delegates consensus to ConsensusManager
+ * @notice This version is completely decoupled from voting/challenge logic
  */
-contract TransactionManager {
+contract TransactionManager is ReentrancyGuard {
     event ProposalSubmitted(bytes32 indexed proposalId, string transaction, address indexed submitter);
     event ProposalOptimisticallyApproved(bytes32 indexed proposalId);
-    event ProposalChallenged(bytes32 indexed proposalId, address indexed challenger);
-    event ProposalFinalized(bytes32 indexed proposalId, bool approved);
     event ValidatorSigned(bytes32 indexed proposalId, address indexed validator);
+    event ProposalFinalized(bytes32 indexed proposalId, bool approved);
     event LLMValidationResult(bytes32 indexed proposalId, bool isValid);
-    event VoteSubmitted(bytes32 indexed proposalId, address indexed validator, bool support);
-    event ChallengeResolved(bytes32 indexed proposalId, bool approved, uint256 yesVotes, uint256 noVotes);
-    event ValidatorSlashed(bytes32 indexed proposalId, address indexed challenger, uint256 amount, bool wasHonest);
 
+    // Custom errors
     error InvalidValidatorFactory();
     error InvalidLLMOracle();
     error EmptyTransaction();
     error ProposalAlreadyExists();
+    error ProposalNotFound();
+    error InvalidProposalState();
     error ChallengePeriodExpired();
     error NotEnoughValidators();
-    error NotAValidator();
-    error AlreadyVoted();
-    error InvalidSignature();
-    error ChallengePeriodNotEnded();
-    error UseResolveChallengeForVotingProposals();
-    error InvalidProposalStateForFinalization();
-    error VotingPeriodNotEnded();
-    error InvalidProposalState();
-    error ProposalNotFound();
     error NotASelectedValidator();
     error AlreadySigned();
-    error VotingPeriodExpired();
-    error NotInVotingPeriod();
+    error InvalidSignature();
     error InvalidSignatureLength();
-    error InvalidSignatureV();
-    error UseSignProposalToFinalize();
-
-    ValidatorFactory public validatorFactory;
-    ILLMOracle public llmOracle;
-
-    // Optimized voting data structure
-    struct VoteData {
-        uint8 yesVotes; // Count of yes votes (max 5 validators)
-        uint8 noVotes; // Count of no votes (max 5 validators)
-        uint8 votersBitmap; // Bitmap: bit i set if validator i voted
-        uint8 votesBitmap; // Bitmap: bit i set if validator i voted YES
-    }
-
-    mapping(bytes32 => Proposal) public proposals;
-    mapping(bytes32 => ChallengeData) public challengeData;
-    mapping(bytes32 => VoteData) public proposalVotes; // Optimized vote storage
-    mapping(bytes32 => mapping(address => bool)) public hasValidatorSigned;
-    mapping(bytes32 => address[]) public proposalSigners;
-    uint256 public proposalCount;
-
-    uint256 public constant CHALLENGE_PERIOD = 10; // blocks - as per requirement
-    uint256 public constant VOTING_PERIOD = 30; // blocks for voting after challenge
-    uint256 public constant REQUIRED_SIGNATURES = 3; // 3 out of 5 validators
-    uint256 public constant VALIDATOR_SET_SIZE = 5; // top 5 validators for consensus
-    uint256 public constant SLASH_PERCENTAGE = 10; // 10% slash for false challenges
 
     enum ProposalState {
         Proposed,           // Just submitted, awaiting LLM validation
-        OptimisticApproved, // LLM approved, in challenge period
-        Challenged,         // Challenge initiated, voting in progress
-        Finalized,          // Approved and executed
-        Rejected            // Rejected by LLM or challenge voting
+        OptimisticApproved, // LLM approved, in challenge period, collecting signatures
+        Challenged,         // Challenge initiated, consensus in progress
+        Finalized,          // Approved and executed with validator signatures
+        Rejected            // Rejected by LLM or consensus voting
     }
 
-    // Core proposal data - optimized structure
+    // Simplified proposal structure - consensus data moved to ConsensusManager
     struct Proposal {
         bytes32 proposalId;
         string transaction;
         address proposer;
         uint256 blockNumber;
         ProposalState state;
-        uint256 deadline;              // Universal deadline (challenge or voting)
         uint8 signatureCount;          // Number of validator signatures (max 5)
         address[] selectedValidators;  // Validators selected for this proposal
     }
 
-    // Challenge-specific data - separated for modularity
-    struct ChallengeData {
-        address challenger;
-        uint256 challengeBlock;
-    }
+    ValidatorFactory public immutable validatorFactory;
+    ILLMOracle public immutable llmOracle;
+    IConsensusProvider public immutable consensusProvider;
+
+    mapping(bytes32 => Proposal) public proposals;
+    mapping(bytes32 => mapping(address => bool)) public hasValidatorSigned;
+    mapping(bytes32 => address[]) public proposalSigners;
+    uint256 public proposalCount;
+
+    uint256 public constant CHALLENGE_PERIOD = 10; // blocks for challenge period
+    uint256 public constant REQUIRED_SIGNATURES = 3; // 3 out of 5 validators
+    uint256 public constant VALIDATOR_SET_SIZE = 5; // top 5 validators for consensus
 
     constructor(address _validatorFactory, address _llmOracle) {
         if (_validatorFactory == address(0)) revert InvalidValidatorFactory();
@@ -105,21 +71,25 @@ contract TransactionManager {
 
         validatorFactory = ValidatorFactory(_validatorFactory);
         llmOracle = ILLMOracle(_llmOracle);
+        
+        // Deploy ConsensusManager with this contract as transaction manager
+        consensusProvider = IConsensusProvider(
+            address(new ConsensusManager(_validatorFactory, address(this)))
+        );
     }
 
     /**
      * @dev Submit a proposal for consensus
-     * @param transaction Transaction string to be validated (e.g., "Approve loan for user X based on LLM analysis")
-     * @dev NOTE: For async Oracle validation, we could use a callback function to update the proposal state.
+     * @param transaction Transaction string to be validated
      * @return proposalId Unique identifier for the proposal
      */
-    function submitProposal(string calldata transaction) external returns (bytes32 proposalId) {
+    function submitProposal(string calldata transaction) external nonReentrant returns (bytes32 proposalId) {
         if (bytes(transaction).length == 0) revert EmptyTransaction();
 
         proposalId = keccak256(abi.encodePacked(transaction, block.timestamp, msg.sender));
         if (proposals[proposalId].proposalId != bytes32(0)) revert ProposalAlreadyExists();
 
-        // Get top validators for this proposal
+        // Get top validators for this proposal  
         address[] memory topValidators = _getTopValidators();
         if (topValidators.length < REQUIRED_SIGNATURES) revert NotEnoughValidators();
 
@@ -128,7 +98,6 @@ contract TransactionManager {
         
         // Create proposal with state based on LLM result
         ProposalState initialState = llmResult ? ProposalState.OptimisticApproved : ProposalState.Rejected;
-        uint256 deadline = llmResult ? block.number + CHALLENGE_PERIOD : 0;
 
         proposals[proposalId] = Proposal({
             proposalId: proposalId,
@@ -136,12 +105,17 @@ contract TransactionManager {
             proposer: msg.sender,
             blockNumber: block.number,
             state: initialState,
-            deadline: deadline,
             signatureCount: 0,
             selectedValidators: topValidators
         });
 
         proposalCount++;
+
+        // If LLM approved, initialize consensus process
+        if (llmResult) {
+            consensusProvider.initializeConsensus(proposalId, topValidators, CHALLENGE_PERIOD);
+            emit ProposalOptimisticallyApproved(proposalId);
+        }
 
         emit ProposalSubmitted(proposalId, transaction, msg.sender);
         emit LLMValidationResult(proposalId, llmResult);
@@ -154,11 +128,13 @@ contract TransactionManager {
      * @param proposalId Proposal identifier
      * @param signature ECDSA signature of the proposal hash
      */
-    function signProposal(bytes32 proposalId, bytes calldata signature) external {
+    function signProposal(bytes32 proposalId, bytes calldata signature) external nonReentrant {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
         if (proposal.state != ProposalState.OptimisticApproved) revert InvalidProposalState();
-        if (block.number > proposal.deadline) revert ChallengePeriodExpired();
+        
+        // Check if still in challenge period
+        if (!consensusProvider.canChallengeProposal(proposalId)) revert ChallengePeriodExpired();
         if (hasValidatorSigned[proposalId][msg.sender]) revert AlreadySigned();
 
         // Verify that sender is one of the selected validators for this proposal
@@ -184,31 +160,23 @@ contract TransactionManager {
     }
 
     /**
-     * @dev Challenge a proposal during the challenge period
+     * @dev Challenge a proposal during the challenge period (delegates to consensus provider)
      * @param proposalId Proposal identifier
      */
-    function challengeProposal(bytes32 proposalId) external {
+    function challengeProposal(bytes32 proposalId) external nonReentrant {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
         if (proposal.state != ProposalState.OptimisticApproved) revert InvalidProposalState();
-        if (block.number > proposal.deadline) revert ChallengePeriodExpired();
-        if (!validatorFactory.isActiveValidator(msg.sender)) revert NotAValidator();
 
-        // Set proposal to challenged state with voting deadline
-        proposal.state = ProposalState.Challenged;
-        proposal.deadline = block.number + VOTING_PERIOD;
+        // Delegate to consensus provider
+        consensusProvider.challengeProposal(proposalId, msg.sender);
         
-        // Store challenge data separately
-        challengeData[proposalId] = ChallengeData({
-            challenger: msg.sender,
-            challengeBlock: block.number
-        });
-
-        emit ProposalChallenged(proposalId, msg.sender);
+        // Update local state
+        proposal.state = ProposalState.Challenged;
     }
 
     /**
-     * @dev Submit a vote on a challenged proposal
+     * @dev Submit a vote on a challenged proposal (delegates to consensus provider)
      * @param proposalId Proposal identifier
      * @param support true for yes (approve), false for no (reject)
      * @param signature ECDSA signature of the vote
@@ -217,106 +185,32 @@ contract TransactionManager {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
         if (proposal.state != ProposalState.Challenged) revert InvalidProposalState();
-        if (block.number > proposal.deadline) revert VotingPeriodExpired();
-        if (!validatorFactory.isActiveValidator(msg.sender)) revert NotAValidator();
-        if (_hasValidatorVoted(proposalId, msg.sender)) revert AlreadyVoted();
 
-        // Verify the vote signature
-        bytes32 voteHash = _getVoteHash(proposalId, support);
-        address recoveredSigner = _recoverSigner(voteHash, signature);
-        if (recoveredSigner != msg.sender) revert InvalidSignature();
-
-        // Record the vote using optimized bitmap
-        _recordVote(proposalId, msg.sender, support);
-
-        emit VoteSubmitted(proposalId, msg.sender, support);
+        // Delegate to consensus provider
+        consensusProvider.submitVote(proposalId, msg.sender, support, signature);
     }
 
     /**
-     * @dev Resolve a challenge after voting period ends
+     * @dev Resolve consensus after voting period (delegates to consensus provider)
      * @param proposalId Proposal identifier
      */
-    function resolveChallenge(bytes32 proposalId) external {
+    function resolveChallenge(bytes32 proposalId) external nonReentrant {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
-        if (proposal.state != ProposalState.Challenged) revert InvalidProposalState();
-        if (block.number <= proposal.deadline) revert VotingPeriodNotEnded();
-
-        VoteData memory votes = proposalVotes[proposalId];
-        ChallengeData memory challenge = challengeData[proposalId];
-        uint256 totalVotes = votes.yesVotes + votes.noVotes;
-        bool approved = false;
-
-        if (totalVotes > 0) {
-            // Majority decides - if >=50% vote no, reject the proposal
-            uint256 rejectionThreshold = (totalVotes + 1) / 2; // Ceiling division for >=50%
-            approved = votes.noVotes < rejectionThreshold;
-        } else {
-            // No votes cast - default to original LLM decision (was already OptimisticApproved)
-            approved = true;
+        if (proposal.state != ProposalState.Challenged && proposal.state != ProposalState.OptimisticApproved) {
+            revert InvalidProposalState();
         }
 
-        // Determine if challenge was honest or false
-        bool challengeWasHonest = !approved; // Challenge was honest if proposal was ultimately rejected
-
-        // Handle slashing
-        _handleSlashing(proposalId, challenge.challenger, challengeWasHonest);
-
-        // Update proposal state
+        // Delegate to consensus provider
+        bool approved = consensusProvider.resolveConsensus(proposalId);
+        
+        // Update local state based on consensus result
         proposal.state = approved ? ProposalState.Finalized : ProposalState.Rejected;
-
-        emit ChallengeResolved(proposalId, approved, votes.yesVotes, votes.noVotes);
+        
         emit ProposalFinalized(proposalId, approved);
     }
 
-    /**
-     * @dev Finalize a proposal after challenge period or after challenge resolution
-     * @param proposalId Proposal identifier
-     */
-    function finalizeProposal(bytes32 proposalId) external {
-        Proposal storage proposal = proposals[proposalId];
-        if (proposal.proposalId == bytes32(0)) revert ProposalNotFound();
-
-        bool approved = false;
-
-        if (proposal.state == ProposalState.OptimisticApproved) {
-            // Check if challenge period has ended
-            if (block.number <= proposal.deadline) revert ChallengePeriodNotEnded();
-            // No challenge during period - but still need validator signatures for finalization
-            // This function just expires the challenge period, validators still need to sign
-            // Proposal remains in OptimisticApproved state waiting for signatures
-            revert UseSignProposalToFinalize();
-        } else if (proposal.state == ProposalState.Challenged) {
-            // Should use resolveChallenge instead
-            revert UseResolveChallengeForVotingProposals();
-        } else {
-            revert InvalidProposalStateForFinalization();
-        }
-
-        emit ProposalFinalized(proposalId, approved);
-    }
-
-    /**
-     * @dev Handle slashing for challenge resolution
-     * @param proposalId Proposal identifier
-     * @param challenger Address of the challenger
-     * @param wasHonest Whether the challenge was honest
-     */
-    function _handleSlashing(bytes32 proposalId, address challenger, bool wasHonest) internal {
-        if (!wasHonest) {
-            // False challenge - slash challenger's stake
-            uint256 challengerStake = validatorFactory.getValidatorStake(challenger);
-            if (challengerStake > 0) {
-                uint256 slashAmount = (challengerStake * SLASH_PERCENTAGE) / 100;
-                // Actually perform the slashing
-                validatorFactory.slashValidator(challenger, slashAmount, "False challenge");
-                emit ValidatorSlashed(proposalId, challenger, slashAmount, false);
-            }
-        } else {
-            // Honest challenge - no slashing needed
-            emit ValidatorSlashed(proposalId, challenger, 0, true);
-        }
-    }
+    // ==================== INTERNAL FUNCTIONS ====================
 
     /**
      * @dev Get top validators for consensus
@@ -331,69 +225,6 @@ contract TransactionManager {
         uint256 count = validatorCount < VALIDATOR_SET_SIZE ? validatorCount : VALIDATOR_SET_SIZE;
         (address[] memory topValidators, ) = validatorFactory.getTopNValidators(count);
         return topValidators;
-    }
-
-    /**
-     * @dev Get validator index in the selected validators array for a proposal
-     * @param proposalId Proposal identifier
-     * @param validator Validator address
-     * @return index Validator index (0-4), reverts if not found
-     */
-    function _getValidatorIndex(bytes32 proposalId, address validator) public view returns (uint8 index) {
-        address[] memory selectedValidators = proposals[proposalId].selectedValidators;
-        for (uint8 i = 0; i < selectedValidators.length; i++) {
-            if (selectedValidators[i] == validator) {
-                return i;
-            }
-        }
-        revert NotASelectedValidator();
-    }
-
-    /**
-     * @dev Check if validator has voted using bitmap
-     * @param proposalId Proposal identifier
-     * @param validator Validator address
-     * @return hasVoted Whether validator has voted
-     */
-    function _hasValidatorVoted(bytes32 proposalId, address validator) internal view returns (bool hasVoted) {
-        uint8 index = _getValidatorIndex(proposalId, validator);
-        uint8 votersBitmap = proposalVotes[proposalId].votersBitmap;
-        return (votersBitmap >> index) & 1 == 1;
-    }
-
-    /**
-     * @dev Get validator vote using bitmap
-     * @param proposalId Proposal identifier
-     * @param validator Validator address
-     * @return support Vote (true = yes, false = no)
-     */
-    function _getValidatorVote(bytes32 proposalId, address validator) internal view returns (bool support) {
-        uint8 index = _getValidatorIndex(proposalId, validator);
-        uint8 votesBitmap = proposalVotes[proposalId].votesBitmap;
-        return (votesBitmap >> index) & 1 == 1;
-    }
-
-    /**
-     * @dev Record validator vote using bitmaps
-     * @param proposalId Proposal identifier
-     * @param validator Validator address
-     * @param support Vote (true = yes, false = no)
-     */
-    function _recordVote(bytes32 proposalId, address validator, bool support) internal {
-        uint8 index = _getValidatorIndex(proposalId, validator);
-        VoteData storage votes = proposalVotes[proposalId];
-
-        // Set voted bit
-        votes.votersBitmap |= uint8(1 << index);
-
-        // Set/clear vote bit and update counters
-        if (support) {
-            votes.votesBitmap |= uint8(1 << index);
-            votes.yesVotes++;
-        } else {
-            votes.votesBitmap &= ~uint8(1 << index);
-            votes.noVotes++;
-        }
     }
 
     /**
@@ -419,26 +250,12 @@ contract TransactionManager {
      * @return hash Message hash for signing
      */
     function _getProposalHash(bytes32 proposalId, string memory transaction) internal pure returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked(
-                    "\x19Ethereum Signed Message:\n32",
-                    keccak256(abi.encodePacked(proposalId, transaction))
-                )
-            );
-    }
-
-    /**
-     * @dev Create vote hash for signature verification
-     * @param proposalId Proposal identifier
-     * @param support Vote (true for yes, false for no)
-     * @return hash Vote hash for signing
-     */
-    function _getVoteHash(bytes32 proposalId, bool support) internal pure returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encodePacked(proposalId, support)))
-            );
+        return keccak256(
+            abi.encodePacked(
+                "\x19Ethereum Signed Message:\n32",
+                keccak256(abi.encodePacked(proposalId, transaction))
+            )
+        );
     }
 
     /**
@@ -464,48 +281,24 @@ contract TransactionManager {
             v += 27;
         }
 
-        if (v != 27 && v != 28) revert InvalidSignatureV();
+        if (v != 27 && v != 28) revert InvalidSignature();
 
         return ecrecover(messageHash, v, r, s);
     }
 
     // ==================== VIEW FUNCTIONS ====================
 
-    // Struct for returning proposal info (reduces stack depth)
-    struct ProposalInfo {
-        string transaction;
-        address proposer;
-        uint256 blockNumber;
-        ProposalState state;
-        uint256 challengeDeadline;
-        uint256 votingDeadline;
-        address challenger;
-        uint256 signatureCount;
-        uint256 yesVotes;
-        uint256 noVotes;
-        bool llmValidation;
-        bool executed;
-    }
-
     /**
-     * @dev Get proposal information (backward compatible)
+     * @dev Get proposal information
      * @param proposalId Proposal identifier
      * @return transaction Transaction string
      * @return proposer Proposal submitter
      * @return blockNumber Block number when submitted
      * @return state Current proposal state
-     * @return challengeDeadline Challenge deadline
-     * @return votingDeadline Voting deadline (if in voting)
-     * @return challenger Address of challenger
      * @return signatureCount Number of validator signatures
-     * @return yesVotes Number of yes votes
-     * @return noVotes Number of no votes
-     * @return llmValidation LLM validation result
-     * @return executed Whether proposal was executed
+     * @return selectedValidators Validators selected for this proposal
      */
-    function getProposal(
-        bytes32 proposalId
-    )
+    function getProposal(bytes32 proposalId)
         external
         view
         returns (
@@ -513,85 +306,19 @@ contract TransactionManager {
             address proposer,
             uint256 blockNumber,
             ProposalState state,
-            uint256 challengeDeadline,
-            uint256 votingDeadline,
-            address challenger,
             uint256 signatureCount,
-            uint256 yesVotes,
-            uint256 noVotes,
-            bool llmValidation,
-            bool executed
+            address[] memory selectedValidators
         )
     {
         Proposal storage proposal = proposals[proposalId];
-        VoteData memory votes = proposalVotes[proposalId];
-        ChallengeData memory challenge = challengeData[proposalId];
-        
-        // Map deadline based on state
-        uint256 challengeDeadline_ = (proposal.state == ProposalState.OptimisticApproved) ? proposal.deadline : 0;
-        uint256 votingDeadline_ = (proposal.state == ProposalState.Challenged) ? proposal.deadline : 0;
-        
-        // Derive execution status from state
-        bool executed_ = (proposal.state == ProposalState.Finalized);
-        // Derive LLM validation from state (if OptimisticApproved or Finalized, LLM said yes)
-        bool llmValidation_ = (proposal.state != ProposalState.Rejected);
-        
         return (
             proposal.transaction,
             proposal.proposer,
             proposal.blockNumber,
             proposal.state,
-            challengeDeadline_,
-            votingDeadline_,
-            challenge.challenger,
             proposal.signatureCount,
-            votes.yesVotes,
-            votes.noVotes,
-            llmValidation_,
-            executed_
+            proposal.selectedValidators
         );
-    }
-
-    /**
-     * @dev Get proposal information as struct (stack optimized)
-     * @param proposalId Proposal identifier
-     * @return info Complete proposal information
-     */
-    function getProposalStruct(bytes32 proposalId) external view returns (ProposalInfo memory info) {
-        Proposal storage proposal = proposals[proposalId];
-        VoteData memory votes = proposalVotes[proposalId];
-        ChallengeData memory challenge = challengeData[proposalId];
-        
-        // Map deadline based on state
-        uint256 challengeDeadline_ = (proposal.state == ProposalState.OptimisticApproved) ? proposal.deadline : 0;
-        uint256 votingDeadline_ = (proposal.state == ProposalState.Challenged) ? proposal.deadline : 0;
-        
-        // Derive execution status from state
-        bool executed_ = (proposal.state == ProposalState.Finalized);
-        // Derive LLM validation from state (if OptimisticApproved or Finalized, LLM said yes)
-        bool llmValidation_ = (proposal.state != ProposalState.Rejected);
-        
-        info.transaction = proposal.transaction;
-        info.proposer = proposal.proposer;
-        info.blockNumber = proposal.blockNumber;
-        info.state = proposal.state;
-        info.challengeDeadline = challengeDeadline_;
-        info.votingDeadline = votingDeadline_;
-        info.challenger = challenge.challenger;
-        info.signatureCount = proposal.signatureCount;
-        info.yesVotes = votes.yesVotes;
-        info.noVotes = votes.noVotes;
-        info.llmValidation = llmValidation_;
-        info.executed = executed_;
-    }
-
-    /**
-     * @dev Get selected validators for a proposal
-     * @param proposalId Proposal identifier
-     * @return validators Array of selected validator addresses
-     */
-    function getProposalValidators(bytes32 proposalId) external view returns (address[] memory) {
-        return proposals[proposalId].selectedValidators;
     }
 
     /**
@@ -604,62 +331,12 @@ contract TransactionManager {
     }
 
     /**
-     * @dev Get voters for a proposal
-     * @param proposalId Proposal identifier
-     * @return voters Array of addresses that voted on the proposal
-     */
-    function getProposalVoters(bytes32 proposalId) external view returns (address[] memory voters) {
-        address[] memory selectedValidators = proposals[proposalId].selectedValidators;
-        uint8 votersBitmap = proposalVotes[proposalId].votersBitmap;
-
-        // Count voters first
-        uint256 voterCount = 0;
-        for (uint8 i = 0; i < selectedValidators.length; i++) {
-            if ((votersBitmap >> i) & 1 == 1) {
-                voterCount++;
-            }
-        }
-
-        // Build voters array
-        voters = new address[](voterCount);
-        uint256 index = 0;
-        for (uint8 i = 0; i < selectedValidators.length; i++) {
-            if ((votersBitmap >> i) & 1 == 1) {
-                voters[index] = selectedValidators[i];
-                index++;
-            }
-        }
-    }
-
-    /**
-     * @dev Get a validator's vote on a proposal
-     * @param proposalId Proposal identifier
-     * @param validator Validator address
-     * @return hasVoted Whether the validator voted
-     * @return vote The vote (true for yes, false for no)
-     */
-    function getValidatorVote(bytes32 proposalId, address validator) external view returns (bool hasVoted, bool vote) {
-        // Check if validator is in selected validators (will revert if not found)
-        try this._getValidatorIndex(proposalId, validator) returns (uint8 index) {
-            uint8 votersBitmap = proposalVotes[proposalId].votersBitmap;
-            uint8 votesBitmap = proposalVotes[proposalId].votesBitmap;
-            hasVoted = (votersBitmap >> index) & 1 == 1;
-            vote = (votesBitmap >> index) & 1 == 1;
-        } catch {
-            // Validator not selected for this proposal
-            hasVoted = false;
-            vote = false;
-        }
-    }
-
-    /**
      * @dev Check if proposal is approved and executed
      * @param proposalId Proposal identifier
      * @return approved Whether the proposal is approved and executed
      */
     function isProposalApproved(bytes32 proposalId) external view returns (bool) {
-        Proposal storage proposal = proposals[proposalId];
-        return proposal.state == ProposalState.Finalized;
+        return proposals[proposalId].state == ProposalState.Finalized;
     }
 
     /**
@@ -687,24 +364,83 @@ contract TransactionManager {
         return _getTopValidators();
     }
 
+    // ==================== CONSENSUS PROVIDER DELEGATION ====================
+
     /**
-     * @dev Check if a proposal can be challenged
+     * @dev Check if a proposal can be challenged (delegates to consensus provider)
      * @param proposalId Proposal identifier
-     * @return canChallenge Whether the proposal can be challenged
+     * @return canChallenge Whether challenge is possible
      */
     function canChallengeProposal(bytes32 proposalId) external view returns (bool) {
-        Proposal storage proposal = proposals[proposalId];
-        return proposal.state == ProposalState.OptimisticApproved && block.number <= proposal.deadline;
+        return consensusProvider.canChallengeProposal(proposalId);
     }
 
     /**
-     * @dev Check if a proposal is in voting period
+     * @dev Check if a proposal is in voting period (delegates to consensus provider)
      * @param proposalId Proposal identifier
      * @return inVoting Whether the proposal is in voting period
      */
     function isInVotingPeriod(bytes32 proposalId) external view returns (bool) {
-        Proposal storage proposal = proposals[proposalId];
-        return proposal.state == ProposalState.Challenged && block.number <= proposal.deadline;
+        return consensusProvider.isInVotingPeriod(proposalId);
+    }
+
+    /**
+     * @dev Get consensus state (delegates to consensus provider)
+     * @param proposalId Proposal identifier
+     * @return state Current consensus state
+     * @return deadline Current deadline
+     * @return yesVotes Number of yes votes
+     * @return noVotes Number of no votes
+     */
+    function getConsensusState(bytes32 proposalId)
+        external
+        view
+        returns (
+            IConsensusProvider.ConsensusState state,
+            uint256 deadline,
+            uint256 yesVotes,
+            uint256 noVotes
+        )
+    {
+        return consensusProvider.getConsensusState(proposalId);
+    }
+
+    /**
+     * @dev Get challenge information (delegates to consensus provider)
+     * @param proposalId Proposal identifier
+     * @return challenger Address that initiated challenge
+     * @return challengeBlock Block when challenge was initiated
+     */
+    function getChallengeInfo(bytes32 proposalId)
+        external
+        view
+        returns (address challenger, uint256 challengeBlock)
+    {
+        return consensusProvider.getChallengeInfo(proposalId);
+    }
+
+    /**
+     * @dev Get voters for a proposal (delegates to consensus provider)
+     * @param proposalId Proposal identifier
+     * @return voters Array of addresses that voted
+     */
+    function getProposalVoters(bytes32 proposalId) external view returns (address[] memory) {
+        return consensusProvider.getVoters(proposalId);
+    }
+
+    /**
+     * @dev Get individual validator's vote (delegates to consensus provider)
+     * @param proposalId Proposal identifier
+     * @param validator Validator address
+     * @return hasVoted Whether validator has voted
+     * @return support Vote direction
+     */
+    function getValidatorVote(bytes32 proposalId, address validator)
+        external
+        view
+        returns (bool hasVoted, bool support)
+    {
+        return consensusProvider.getValidatorVote(proposalId, validator);
     }
 
     /**
@@ -716,10 +452,10 @@ contract TransactionManager {
     }
 
     /**
-     * @dev Get the LLM Oracle type/version
-     * @return oracleType String identifying the oracle type
+     * @dev Get the Consensus Provider address
+     * @return provider Address of the Consensus Provider contract
      */
-    function getLLMOracleType() external view returns (string memory) {
-        return llmOracle.getOracleType();
+    function getConsensusProvider() external view returns (address) {
+        return address(consensusProvider);
     }
-}
+} 

@@ -286,7 +286,7 @@ contract ConsensusManager is IConsensusProvider, ReentrancyGuard {
             v += 27;
         }
 
-        if (v != 27 && v != 28) revert InvalidSignatureV();
+        if (v != 27 && v != 28) revert InvalidSignature();
 
         return ecrecover(messageHash, v, r, s);
     }

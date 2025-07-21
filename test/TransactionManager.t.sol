@@ -7,6 +7,32 @@ import "../src/ValidatorFactory.sol";
 import "../src/oracles/MockLLMOracle.sol";
 import "../test/mock/ERC20TokenMock.sol";
 
+/**
+ * @title TransactionManager Test Suite
+ * @dev This test suite covers the optimistic consensus including:
+ *      - Proposal submission and validation
+ *        (e.g. test_SubmitProposal, test_RevertWhen_SubmitProposal_DuplicateProposal)
+ *      - LLM-based transaction validation (mocked)
+ *        (e.g. test_TestLLMValidation, test_OptimisticApproval_RequiresLLMValidation)
+ *      - Validator signature collection for optimistic approval
+ *        (e.g. test_SignProposal, test_RevertWhen_SignProposal_InvalidSignature)
+ *      - Challenge mechanisms and dispute resolution
+ *        (e.g. test_ChallengeProposal, test_ResolveChallenge_Approved)
+ *      - Voting periods and consensus resolution
+ *        (e.g. test_SubmitVote, test_IsInVotingPeriod, test_VotingPeriodExpiry)
+ *      - Slashing mechanisms for false challenges
+ *        (e.g. test_ResolveChallenge_Rejected with validator slashing)
+ *
+ * Test Strategy:
+ * 1. Unit Tests: Individual function behavior and state changes
+ * 2. Integration Tests: Complete proposal lifecycle from submission to finalization
+ *    (e.g. test_CompleteProposalLifecycle)
+ * 3. Edge Cases: Empty validator sets, expired periods, invalid signatures
+ *    (e.g. test_EdgeCase_EmptyValidatorSet, test_RevertWhen_ChallengeProposal_ExpiredChallengePeriod)
+ * 4. Security Tests: Access control, reentrancy protection, slashing mechanics
+ * 5. Event Testing: All state changes emit appropriate events
+ *
+ */
 contract TransactionManagerTest is Test {
     // Contracts
     TransactionManager public transactionManager;
@@ -159,13 +185,13 @@ contract TransactionManagerTest is Test {
         assertEq(transactionManager.proposalCount(), 1);
     }
 
-    function test_SubmitProposal_EmptyTransaction() public {
+    function test_RevertWhen_SubmitProposal_EmptyTransaction() public {
         vm.prank(proposer);
         vm.expectRevert("Empty transaction");
         transactionManager.submitProposal("");
     }
 
-    function test_SubmitProposal_DuplicateProposal() public {
+    function test_RevertWhen_SubmitProposal_DuplicateProposal() public {
         vm.startPrank(proposer);
 
         transactionManager.submitProposal(TEST_TRANSACTION);
@@ -225,7 +251,7 @@ contract TransactionManagerTest is Test {
         assertEq(signers[0], validator1);
     }
 
-    function test_SignProposal_InvalidSignature() public {
+    function test_RevertWhen_SignProposal_InvalidSignature() public {
         vm.prank(proposer);
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
@@ -237,7 +263,7 @@ contract TransactionManagerTest is Test {
         transactionManager.signProposal(proposalId, invalidSignature);
     }
 
-    function test_SignProposal_AlreadySigned() public {
+    function test_RevertWhen_SignProposal_AlreadySigned() public {
         vm.prank(proposer);
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
@@ -326,7 +352,7 @@ contract TransactionManagerTest is Test {
         assertFalse(executed); // Should revert optimistic execution
     }
 
-    function test_ChallengeProposal_InvalidState() public {
+    function test_RevertWhen_ChallengeProposal_InvalidState() public {
         vm.prank(proposer);
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
         // Don't get optimistic approval
@@ -336,7 +362,7 @@ contract TransactionManagerTest is Test {
         transactionManager.challengeProposal(proposalId);
     }
 
-    function test_ChallengeProposal_ExpiredChallengePeriod() public {
+    function test_RevertWhen_ChallengeProposal_ExpiredChallengePeriod() public {
         vm.prank(proposer);
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
         _signProposalWithValidators(proposalId, TEST_TRANSACTION, 3);
@@ -400,7 +426,7 @@ contract TransactionManagerTest is Test {
         assertEq(noVotes, 0);
     }
 
-    function test_SubmitVote_InvalidVotingState() public {
+    function test_RevertWhen_SubmitVote_InvalidVotingState() public {
         vm.prank(proposer);
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
@@ -418,7 +444,7 @@ contract TransactionManagerTest is Test {
         transactionManager.submitVote(proposalId, support, voteSignature);
     }
 
-    function test_SubmitVote_AlreadyVoted() public {
+    function test_RevertWhen_SubmitVote_AlreadyVoted() public {
         // Setup challenged proposal
         vm.prank(proposer);
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
@@ -569,7 +595,7 @@ contract TransactionManagerTest is Test {
         assertTrue(executed);
     }
 
-    function test_FinalizeProposal_ChallengePeriodNotEnded() public {
+    function test_RevertWhen_FinalizeProposal_ChallengePeriodNotEnded() public {
         vm.prank(proposer);
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
         _signProposalWithValidators(proposalId, TEST_TRANSACTION, 3);
@@ -716,7 +742,7 @@ contract TransactionManagerTest is Test {
         transactionManager.resolveChallenge(proposalId);
     }
 
-    function test_FinalizeProposal_InvalidState() public {
+    function test_RevertWhen_FinalizeProposal_InvalidState() public {
         vm.prank(proposer);
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 

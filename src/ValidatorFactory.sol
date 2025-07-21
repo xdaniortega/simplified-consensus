@@ -227,18 +227,6 @@ contract ValidatorFactory is ReentrancyGuard {
     }
 
     /**
-     * @dev Check if validator can unstake (bonding period expired)
-     * @param validator Validator address
-     * @return canUnstake Whether validator can unstake
-     */
-    function canUnstake(address validator) external view returns (bool) {
-        if (!isValidator[validator]) return false;
-        address proxy = validatorToProxy[validator];
-        uint256 bondingBlock = ValidatorLogic(proxy).getBondingBlock();
-        return block.number > bondingBlock;
-    }
-
-    /**
      * @dev Compute proxy address
      * @param validator Validator address
      * @param amount Amount to stake

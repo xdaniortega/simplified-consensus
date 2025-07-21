@@ -4,11 +4,43 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../src/ValidatorFactory.sol";
 import "../src/ValidatorLogic.sol";
-import "./mock/ERC20TokenMock.sol";
+import "../test/mock/ERC20TokenMock.sol";
 
+/**
+ * @title ValidatorFactory Test Suite
+ * @notice Comprehensive test suite for ValidatorFactory and ValidatorLogic contracts
+ * @dev This test suite covers validator staking mechanics using beacon proxy pattern:
+ *      - Validator registration and staking with ERC20 tokens
+ *        (e.g. test_Stake_WhenCalled_DeploysBeaconProxyAndInitializesCorrectly, testStake_MultipleValidators)
+ *      - Beacon proxy deployment for individual validator logic contracts
+ *        (e.g. testComputeProxyAddress, testValidatorLogic_Initialize_RevertAlreadyInitialized)
+ *      - Stake management including partial/full unstaking
+ *        (e.g. testUnstake_Partial, test_Unstake_WhenCalled_UpdatesStateAndRemovesValidatorIfBelowMinimum)
+ *      - Validator selection algorithms (top-N by stake)
+ *        (e.g. testGetTopNValidators, testGetAllValidators_ReturnsAll)
+ *      - Slashing mechanisms and stake adjustments
+ *        (e.g. integration with TransactionManager slashing)
+ *      - ValidatorLogic contract functionality through proxies
+ *        (e.g. test_ValidatorLogic_GetValidatorInfo, testValidatorLogic_CompleteStakeUnstakeFlow)
+ *
+ * Test Strategy:
+ * 1. Factory Tests: Core staking/unstaking functionality and validator management
+ *    (e.g. test_RevertWhen_Stake_AlreadyValidator, test_RevertWhen_Unstake_MoreThanStaked)
+ * 2. Validator Logic Tests: Individual proxy contract behavior and access control
+ *    (e.g. testValidatorLogic_OnlyOwnerAndFactory, test_ValidatorLogic_FactoryOnlyFunctions)
+ * 3. Fuzz Tests: Property-based testing with random stake amounts
+ *    (e.g. testFuzz_StakeAndUnstake, testFuzz_MultipleValidators)
+ * 4. Invariant Tests: System-wide properties that must always hold
+ *    (e.g. invariant_TotalStakeNeverExceedsSupply, invariant_MaxValidatorsNotExceeded)
+ * 5. Edge Cases: Boundary conditions, zero amounts, max validators
+ *    (e.g. test_RevertWhen_Stake_BelowMinimum, testStake_RevertMaxValidatorsReached)
+ * 6. Integration Tests: Multi-validator scenarios and complex interactions
+ *    (e.g. testRemoveValidatorFromArray_RemovesMiddle, test_ValidatorLogic_MultipleStakingOperations)
+ */
 contract ValidatorFactoryTest is Test {
     ValidatorFactory factory;
     ERC20TokenMock token;
+    address[] public validators;
     address alice = vm.addr(1);
     address bob = vm.addr(2);
     address charlie = vm.addr(3);
@@ -23,9 +55,13 @@ contract ValidatorFactoryTest is Test {
         token.mint(alice, 10000);
         token.mint(bob, 10000);
         token.mint(charlie, 10000);
+        validators = new address[](3);
+        validators[0] = alice;
+        validators[1] = bob;
+        validators[2] = charlie;
     }
 
-    function testStake_WhenCalled_DeploysBeaconProxyAndInitializesCorrectly() public {
+    function test_Stake_WhenCalled_DeploysBeaconProxyAndInitializesCorrectly() public {
         vm.startPrank(alice);
         token.approve(address(factory), 2000);
         address expectedProxy = factory.computeProxyAddress(alice, 2000);
@@ -45,7 +81,7 @@ contract ValidatorFactoryTest is Test {
         vm.stopPrank();
     }
 
-    function testUnstake_WhenCalled_UpdatesStateAndRemovesValidatorIfBelowMinimum() public {
+    function test_Unstake_WhenCalled_UpdatesStateAndRemovesValidatorIfBelowMinimum() public {
         vm.startPrank(alice);
         token.approve(address(factory), 2000);
         factory.stake(2000);
@@ -62,7 +98,7 @@ contract ValidatorFactoryTest is Test {
         vm.stopPrank();
     }
 
-    function testStake_WhenCalledTwice_Reverts() public {
+    function test_RevertWhen_Stake_CalledTwice() public {
         vm.startPrank(alice);
         token.approve(address(factory), 2000);
         factory.stake(2000);
@@ -72,7 +108,7 @@ contract ValidatorFactoryTest is Test {
         vm.stopPrank();
     }
 
-    function testStake_WhenBelowMinimum_Reverts() public {
+    function test_RevertWhen_Stake_BelowMinimum() public {
         vm.startPrank(bob);
         token.approve(address(factory), 500);
         vm.expectRevert();
@@ -80,7 +116,7 @@ contract ValidatorFactoryTest is Test {
         vm.stopPrank();
     }
 
-    function testUnstake_WhenMoreThanStaked_Reverts() public {
+    function test_RevertWhen_Unstake_MoreThanStaked() public {
         vm.startPrank(alice);
         token.approve(address(factory), 2000);
         factory.stake(2000);
@@ -125,7 +161,7 @@ contract ValidatorFactoryTest is Test {
         vm.stopPrank();
     }
 
-    function testUnstake_NotAValidator_Reverts() public {
+    function test_RevertWhen_Unstake_NotAValidator() public {
         vm.startPrank(bob);
         vm.expectRevert();
         factory.unstake(1000);
@@ -203,17 +239,6 @@ contract ValidatorFactoryTest is Test {
         assertEq(factory.getValidatorStake(alice), 2000);
     }
 
-    function testCanUnstake() public {
-        assertFalse(factory.canUnstake(alice));
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        vm.stopPrank();
-        // Simula avance de bloque
-        vm.roll(block.number + 2);
-        assertTrue(factory.canUnstake(alice));
-    }
-
     function testComputeProxyAddress() public {
         address predicted = factory.computeProxyAddress(alice, 2000);
         vm.startPrank(alice);
@@ -224,7 +249,7 @@ contract ValidatorFactoryTest is Test {
         assertEq(predicted, proxy);
     }
 
-    function testStake_RevertAlreadyValidator() public {
+    function test_RevertWhen_Stake_AlreadyValidator() public {
         vm.startPrank(alice);
         token.approve(address(factory), 2000);
         factory.stake(2000);
@@ -384,12 +409,10 @@ contract ValidatorFactoryTest is Test {
         address proxy = factory.validatorToProxy(validatorAddr);
         ValidatorLogic logic = ValidatorLogic(proxy);
 
-        (address owner, uint256 stake, bool isActive, uint256 bondingBlock) = logic.getValidatorInfo();
+        (address owner, uint256 stake) = logic.getValidatorInfo();
 
         assertEq(owner, validatorAddr);
         assertEq(stake, MIN_STAKE);
-        assertTrue(isActive);
-        assertEq(bondingBlock, block.number);
     }
 
     function test_ValidatorLogic_GetValidatorOwner() public {
@@ -406,37 +429,6 @@ contract ValidatorFactoryTest is Test {
 
         address owner = logic.getValidatorOwner();
         assertEq(owner, validatorAddr);
-    }
-
-    function test_ValidatorLogic_GetBondingBlock() public {
-        address validatorAddr = alice;
-
-        vm.prank(validatorAddr);
-        token.approve(address(factory), MIN_STAKE);
-
-        vm.prank(validatorAddr);
-        factory.stake(MIN_STAKE);
-
-        address proxy = factory.validatorToProxy(validatorAddr);
-        ValidatorLogic logic = ValidatorLogic(proxy);
-
-        uint256 bondingBlock = logic.getBondingBlock();
-        assertEq(bondingBlock, block.number);
-    }
-
-    function test_ValidatorLogic_IsActive() public {
-        address validatorAddr = alice;
-
-        vm.prank(validatorAddr);
-        token.approve(address(factory), MIN_STAKE);
-
-        vm.prank(validatorAddr);
-        factory.stake(MIN_STAKE);
-
-        address proxy = factory.validatorToProxy(validatorAddr);
-        ValidatorLogic logic = ValidatorLogic(proxy);
-
-        assertTrue(logic.isActive());
     }
 
     function test_ValidatorLogic_GetValidatorPositionsLength_EmptyValidator() public {
@@ -540,8 +532,8 @@ contract ValidatorFactoryTest is Test {
         uint256 finalStake = logic.getStakeAmount();
         assertEq(finalStake, initialStake - MIN_STAKE / 2);
 
-        // Verify still active
-        assertTrue(logic.isActive());
+        // Verify validator still exists
+        assertTrue(factory.isValidator(alice));
     }
 
     function test_ValidatorLogic_CompleteUnstaking() public {
@@ -663,17 +655,13 @@ contract ValidatorFactoryTest is Test {
         ValidatorLogic logic = ValidatorLogic(proxy);
 
         // Test getValidatorInfo
-        (address owner, uint256 stake, bool isActive, uint256 bondingBlock) = logic.getValidatorInfo();
+        (address owner, uint256 stake) = logic.getValidatorInfo();
         assertEq(owner, alice);
         assertEq(stake, MIN_STAKE);
-        assertTrue(isActive);
-        assertEq(bondingBlock, block.number);
 
         // Test individual getters
         assertEq(logic.getValidatorOwner(), alice);
         assertEq(logic.getStakeAmount(), MIN_STAKE);
-        assertEq(logic.getBondingBlock(), block.number);
-        assertTrue(logic.isActive());
     }
 
     function testValidatorLogic_PositionManagement() public {
@@ -817,7 +805,6 @@ contract ValidatorFactoryTest is Test {
 
         uint256 afterPartialUnstake = logic.getStakeAmount();
         assertEq(afterPartialUnstake, initialStake - MIN_STAKE / 2);
-        assertTrue(logic.isActive());
 
         // Complete unstake
         vm.prank(alice);
@@ -830,31 +817,6 @@ contract ValidatorFactoryTest is Test {
     // ==================== EDGE CASES AND ERROR CONDITIONS ====================
 
     // --- INVARIANT TESTS ---
-}
-
-// --- INVARIANT TEST SUITE ---
-contract ValidatorFactoryInvariant is Test {
-    ValidatorFactory factory;
-    ERC20TokenMock token;
-    address[] public validators;
-    address alice = vm.addr(1);
-    address bob = vm.addr(2);
-    address charlie = vm.addr(3);
-    uint256 public constant MIN_STAKE = 1000;
-    uint16 public constant MAX_VALIDATORS = 5;
-    uint16 public constant THRESHOLD = 3;
-
-    function setUp() public {
-        token = new ERC20TokenMock();
-        factory = new ValidatorFactory(address(token), MIN_STAKE, MAX_VALIDATORS, THRESHOLD);
-        token.mint(alice, 10000);
-        token.mint(bob, 10000);
-        token.mint(charlie, 10000);
-        validators = new address[](3);
-        validators[0] = alice;
-        validators[1] = bob;
-        validators[2] = charlie;
-    }
 
     function invariant_TotalStakeNeverExceedsSupply() public {
         uint256 totalStake = 0;
@@ -891,130 +853,5 @@ contract ValidatorFactoryInvariant is Test {
                 }
             }
         }
-    }
-
-    function testValidatorLogic_AlreadyInitialized() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        address proxy = factory.validatorToProxy(alice);
-        // Llama initialize dos veces
-        (bool success, ) = proxy.call(
-            abi.encodeWithSignature("initialize(address,address,uint256)", alice, address(token), 2000)
-        );
-        assertFalse(success);
-        vm.stopPrank();
-    }
-
-    function testValidatorLogic_InvalidOwner() public {
-        address logic = address(new ValidatorLogic());
-        (bool success, ) = logic.call(
-            abi.encodeWithSignature("initialize(address,address,uint256)", address(0), address(token), 1000)
-        );
-        assertFalse(success);
-    }
-
-    function testValidatorLogic_InvalidAmount() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        address proxy = factory.validatorToProxy(alice);
-        ValidatorLogic logic = ValidatorLogic(proxy);
-        vm.expectRevert();
-        logic.stake(0);
-        vm.stopPrank();
-    }
-
-    function testValidatorLogic_NotFactory() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        address proxy = factory.validatorToProxy(alice);
-        ValidatorLogic logic = ValidatorLogic(proxy);
-        vm.stopPrank();
-        vm.startPrank(bob);
-        vm.expectRevert();
-        logic.stake(1000);
-        vm.stopPrank();
-    }
-
-    function testValidatorLogic_NotValidatorOwner() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        address proxy = factory.validatorToProxy(alice);
-        vm.stopPrank();
-        vm.startPrank(bob);
-        // Intenta llamar una función que debe tener onlyOwner (si existe), sino prueba acceso directo a slots privados
-        vm.expectRevert();
-        (bool success, ) = proxy.call(abi.encodeWithSignature("nonExistentOwnerFunction()"));
-        vm.stopPrank();
-    }
-
-    function testValidatorLogic_MultiplePositionsAndDelete() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        address proxy = factory.validatorToProxy(alice);
-        ValidatorLogic logic = ValidatorLogic(proxy);
-        // Test unstake parcial y total normalmente
-        factory.unstake(500);
-        factory.unstake(1500);
-        assertEq(logic.getStakeAmount(), 0);
-        vm.stopPrank();
-    }
-
-    function testValidatorLogic_DeleteValidatorPosition() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        address proxy = factory.validatorToProxy(alice);
-        ValidatorLogic logic = ValidatorLogic(proxy);
-        // Test normal unstake que fuerza borrado de posición
-        factory.unstake(2000);
-        assertEq(logic.getValidatorPositionsLength(alice), 0);
-        vm.stopPrank();
-    }
-
-    function testValidatorLogic_GettersSetters() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        address proxy = factory.validatorToProxy(alice);
-        ValidatorLogic logic = ValidatorLogic(proxy);
-        assertEq(logic.getValidatorOwner(), alice);
-        assertEq(logic.getStakeAmount(), 2000);
-        assertTrue(logic.isActive());
-        assertGt(logic.getBondingBlock(), 0);
-        assertGt(logic.getValidatorPositionsLength(alice), 0);
-        vm.stopPrank();
-    }
-
-    function testValidatorLogic_Events_AllPaths() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        address proxy = factory.validatorToProxy(alice);
-        ValidatorLogic logic = ValidatorLogic(proxy);
-        // Test unstake normal para cubrir eventos
-        factory.unstake(500);
-        factory.unstake(1500);
-        vm.stopPrank();
-        // No asserts, solo cubre eventos
-    }
-
-    function testFactory_canUnstake_BondingBlock() public {
-        vm.startPrank(alice);
-        token.approve(address(factory), 2000);
-        factory.stake(2000);
-        assertFalse(factory.canUnstake(alice));
-        vm.roll(block.number + 2);
-        assertTrue(factory.canUnstake(alice));
-        vm.stopPrank();
-    }
-
-    function testFactory_computeProxyAddress() public {
-        address predicted = factory.computeProxyAddress(alice, 2000);
-        assertTrue(predicted != address(0));
     }
 }

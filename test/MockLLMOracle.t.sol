@@ -5,6 +5,29 @@ import "forge-std/Test.sol";
 import "../src/oracles/MockLLMOracle.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
+/**
+ * @title MockLLMOracle Test Suite
+ * @notice Test suite for MockLLMOracle contract used in optimistic consensus
+ * @dev This test suite covers the mock LLM validation functionality including:
+ *      - Transaction validation using deterministic hash-based logic
+ *        (e.g. test_ValidateTransaction, test_ValidateTransactionWithEvent)
+ *      - Oracle enablement/disablement controls
+ *        (e.g. test_SetValidationEnabled, test_DisabledOracle)
+ *      - Ownership management and access control
+ *        (e.g. test_TransferOwnership, test_RevertWhen_TransferOwnership_NotOwner)
+ *      - Event emission for validation results
+ *        (e.g. test_ValidateTransactionWithEvent with proper event testing)
+ *      - Batch validation capabilities
+ *        (e.g. test_Statistics showing multiple validations)
+ *      - Statistical tracking and consistency verification
+ *        (e.g. test_ConsistentResults, test_Statistics with counters)
+ *
+ * Key Test Categories:
+ * - Core Validation: test_ValidateTransaction, test_RevertWhen_ValidateTransaction_EmptyString
+ * - Access Control: test_RevertWhen_SetValidationEnabled_NotOwner, test_RevertWhen_TransferOwnership_InvalidAddress
+ * - State Management: test_SetValidationEnabled, test_DisabledOracle
+ * - Consistency: test_ConsistentResults, test_Statistics
+ */
 contract MockLLMOracleTest is Test {
     MockLLMOracle public oracle;
 
@@ -64,7 +87,7 @@ contract MockLLMOracleTest is Test {
         oracle.validateTransaction("Test");
     }
 
-    function test_SetValidationEnabled_NotOwner() public {
+    function test_RevertWhen_SetValidationEnabled_NotOwner() public {
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, user));
         oracle.setValidationEnabled(false);
@@ -78,24 +101,24 @@ contract MockLLMOracleTest is Test {
         assertEq(oracle.owner(), user);
     }
 
-    function test_TransferOwnership_InvalidAddress() public {
+    function test_RevertWhen_TransferOwnership_InvalidAddress() public {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
         oracle.transferOwnership(address(0));
     }
 
-    function test_TransferOwnership_NotOwner() public {
+    function test_RevertWhen_TransferOwnership_NotOwner() public {
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, user));
         oracle.transferOwnership(address(0x2));
     }
 
-    function test_ValidateTransaction_EmptyString() public {
+    function test_RevertWhen_ValidateTransaction_EmptyString() public {
         vm.expectRevert(MockLLMOracle.EmptyTransaction.selector);
         oracle.validateTransaction("");
     }
 
-    function test_ValidateTransactionWithEvent_EmptyString() public {
+    function test_RevertWhen_ValidateTransactionWithEvent_EmptyString() public {
         vm.expectRevert(MockLLMOracle.EmptyTransaction.selector);
         oracle.validateTransactionWithEvent("");
     }

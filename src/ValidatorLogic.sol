@@ -23,16 +23,6 @@ contract ValidatorLogic {
     event StakingPositionClosed(address indexed owner, uint256 positionId, uint256 amount);
     event StakingPositionDecreased(address indexed owner, uint256 positionId, uint256 amount, uint256 newAmount);
 
-    bytes32 private constant VALIDATOR_OWNER_SLOT = keccak256("validator.owner"); // address
-    bytes32 private constant TOKEN_SLOT = keccak256("token"); // address
-    bytes32 private constant STAKE_AMOUNT_SLOT = keccak256("validator.stake.amount"); // uint256
-    bytes32 private constant IS_ACTIVE_SLOT = keccak256("validator.is.active"); // bool
-    bytes32 private constant BONDING_BLOCK_SLOT = keccak256("validator.bonding.block"); // uint256
-    bytes32 private constant POSITION_COUNTER_SLOT = keccak256("position.counter"); // uint256
-    bytes32 private constant STAKING_POSITIONS_SLOT = keccak256("validator.stakingPositions"); // mapping(uint256 => StakingPosition)
-    bytes32 private constant TOTAL_POSITIONS_SLOT = keccak256("validator.totalPositions"); //uint256
-
-    // Custom errors
     error ValidatorNotActive();
     error NotValidatorOwner();
     error NotFactory();
@@ -40,6 +30,13 @@ contract ValidatorLogic {
     error InvalidOwner();
     error InsufficientStakeAmount();
     error InvalidAmount();
+
+    bytes32 private constant VALIDATOR_OWNER_SLOT = keccak256("validator.owner"); // address
+    bytes32 private constant TOKEN_SLOT = keccak256("token"); // address
+    bytes32 private constant VALIDATOR_FACTORY_SLOT = keccak256("validator.factory.address"); // address
+    bytes32 private constant STAKE_AMOUNT_SLOT = keccak256("validator.stake.amount"); // uint256
+    bytes32 private constant STAKING_POSITIONS_SLOT = keccak256("validator.stakingPositions"); // mapping(uint256 => StakingPosition)
+    bytes32 private constant TOTAL_POSITIONS_SLOT = keccak256("validator.totalPositions"); //uint256
 
     struct StakingPosition {
         uint256 id;
@@ -58,7 +55,7 @@ contract ValidatorLogic {
     }
 
     modifier onlyFactory() {
-        if (msg.sender != StorageSlot.getAddressSlot(keccak256("genlayer.factory.address")).value) {
+        if (msg.sender != StorageSlot.getAddressSlot(VALIDATOR_FACTORY_SLOT).value) {
             revert NotFactory();
         }
         _;
@@ -85,9 +82,7 @@ contract ValidatorLogic {
         StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value = _owner;
         StorageSlot.getAddressSlot(TOKEN_SLOT).value = _token;
         StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value = _stakeAmount;
-        StorageSlot.getBooleanSlot(IS_ACTIVE_SLOT).value = true;
-        StorageSlot.getUint256Slot(BONDING_BLOCK_SLOT).value = block.number;
-        StorageSlot.getAddressSlot(keccak256("genlayer.factory.address")).value = msg.sender;
+        StorageSlot.getAddressSlot(VALIDATOR_FACTORY_SLOT).value = msg.sender;
 
         // Create initial staking position for the owner (not address(this))
         _createStakingPosition(_owner, _stakeAmount, "Initial validator stake");
@@ -102,7 +97,6 @@ contract ValidatorLogic {
      */
     function stake(uint256 amount) external onlyFactory returns (uint256 stakedAmount) {
         if (amount == 0) revert InvalidAmount();
-        if (!StorageSlot.getBooleanSlot(IS_ACTIVE_SLOT).value) revert ValidatorNotActive();
 
         // Create new position
         uint256 positionId = _createStakingPosition(
@@ -236,29 +230,13 @@ contract ValidatorLogic {
     }
 
     /**
-     * @dev Get bonding block
-     * @return bondingBlock Block when validator was bonded
-     */
-    function getBondingBlock() external view returns (uint256) {
-        return StorageSlot.getUint256Slot(BONDING_BLOCK_SLOT).value;
-    }
-
-    /**
      * @dev Get validator information
      * @return owner Validator owner address
      * @return stake Current stake amount
-     * @return isActive Whether validator is active
-     * @return bondingBlock Block when validator was bonded
      */
-    function getValidatorInfo()
-        external
-        view
-        returns (address owner, uint256 stake, bool isActive, uint256 bondingBlock)
-    {
+    function getValidatorInfo() external view returns (address owner, uint256 stake) {
         owner = StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value;
         stake = StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
-        isActive = StorageSlot.getBooleanSlot(IS_ACTIVE_SLOT).value;
-        bondingBlock = StorageSlot.getUint256Slot(BONDING_BLOCK_SLOT).value;
     }
 
     /**
@@ -275,14 +253,6 @@ contract ValidatorLogic {
      */
     function getStakeAmount() external view returns (uint256) {
         return StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
-    }
-
-    /**
-     * @dev Check if validator is active
-     * @return isActive Whether validator is active
-     */
-    function isActive() external view returns (bool) {
-        return StorageSlot.getBooleanSlot(IS_ACTIVE_SLOT).value;
     }
 
     // ---------------------------------- INTERNAL FUNCTIONS ----------------------------------

@@ -3,6 +3,8 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/StorageSlot.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "forge-std/console.sol";
 
 /**
  * @title ValidatorLogic
@@ -11,6 +13,7 @@ import "@openzeppelin/contracts/utils/StorageSlot.sol";
  */
 contract ValidatorLogic {
     using StorageSlot for bytes32;
+    using SafeERC20 for IERC20;
 
     event ValidatorInitialized(address indexed owner, address indexed token, uint256 stake);
     event StakeIncreased(address indexed owner, uint256 amount, uint256 newTotal);
@@ -20,6 +23,16 @@ contract ValidatorLogic {
     event StakingPositionClosed(address indexed owner, uint256 positionId, uint256 amount);
     event StakingPositionDecreased(address indexed owner, uint256 positionId, uint256 amount, uint256 newAmount);
 
+    bytes32 private constant VALIDATOR_OWNER_SLOT = keccak256("validator.owner"); // address
+    bytes32 private constant TOKEN_SLOT = keccak256("token"); // address
+    bytes32 private constant STAKE_AMOUNT_SLOT = keccak256("validator.stake.amount"); // uint256
+    bytes32 private constant IS_ACTIVE_SLOT = keccak256("validator.is.active"); // bool
+    bytes32 private constant BONDING_BLOCK_SLOT = keccak256("validator.bonding.block"); // uint256
+    bytes32 private constant POSITION_COUNTER_SLOT = keccak256("position.counter"); // uint256
+    bytes32 private constant STAKING_POSITIONS_SLOT = keccak256("validator.stakingPositions"); // mapping(uint256 => StakingPosition)
+    bytes32 private constant TOTAL_POSITIONS_SLOT = keccak256("validator.totalPositions"); //uint256
+
+    // Custom errors
     error ValidatorNotActive();
     error NotValidatorOwner();
     error NotFactory();
@@ -28,22 +41,13 @@ contract ValidatorLogic {
     error InsufficientStakeAmount();
     error InvalidAmount();
 
-    bytes32 private constant VALIDATOR_OWNER_SLOT = keccak256("validator.owner"); // address
-    bytes32 private constant TOKEN_SLOT = keccak256("token"); // address
-    bytes32 private constant STAKE_AMOUNT_SLOT = keccak256("stake.amount"); // uint256
-    bytes32 private constant IS_ACTIVE_SLOT = keccak256("is.active"); // bool
-    bytes32 private constant BONDING_BLOCK_SLOT = keccak256("bonding.block"); // uint256
-    bytes32 private constant POSITION_COUNTER_SLOT = keccak256("position.counter"); // uint256
-    bytes32 private constant STAKING_POSITIONS_SLOT = keccak256("validator.stakingPositions"); // mapping(uint256 => StakingPosition)
-    bytes32 private constant VALIDATOR_POSITIONS_SLOT = keccak256("validator.validatorPositions"); // mapping(address => uint256[])
-    bytes32 private constant TOTAL_POSITIONS_SLOT = keccak256("validator.totalPositions"); //uint256
-
     struct StakingPosition {
         uint256 id;
         uint256 amount;
         uint256 timestamp;
         uint256 bondingBlock;
         uint256 lastWithdrawalTimestamp;
+        string description;
     }
 
     modifier onlyOwner() {
@@ -85,7 +89,7 @@ contract ValidatorLogic {
         StorageSlot.getUint256Slot(BONDING_BLOCK_SLOT).value = block.number;
         StorageSlot.getAddressSlot(keccak256("genlayer.factory.address")).value = msg.sender;
 
-        // Create initial staking position
+        // Create initial staking position for the owner (not address(this))
         _createStakingPosition(_owner, _stakeAmount, "Initial validator stake");
 
         emit ValidatorInitialized(_owner, _token, _stakeAmount);
@@ -121,24 +125,59 @@ contract ValidatorLogic {
      */
     function unstake(uint256 amount) external onlyFactory returns (uint256 totalUnstaked) {
         uint256 stakeSlot = StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
-
+        console.log("stakeSlot before unstake", stakeSlot);
+        console.log("positions length", getValidatorPositionsLength(getValidatorOwner()));
         if (amount > stakeSlot) revert InsufficientStakeAmount();
 
         totalUnstaked = _unstake(getValidatorOwner(), amount, stakeSlot);
         // Update total stake
         StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value = stakeSlot - totalUnstaked;
 
+        IERC20(StorageSlot.getAddressSlot(TOKEN_SLOT).value).safeTransfer(getValidatorOwner(), totalUnstaked);
+
         return totalUnstaked;
     }
 
-    // ---------------------------------- SETTERS FOR SLOTS ----------------------------------
+    // ---------------------------------- GETTERS & SETTERS FOR SLOTS ----------------------------------
 
-    /**
-     * @dev Deactivate validator (only factory can call)
-     */
-    function deactivate() external onlyFactory {
-        StorageSlot.getBooleanSlot(IS_ACTIVE_SLOT).value = false;
-        emit ValidatorDeactivated(StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value);
+    // Slot helpers y funciones de acceso a posiciones de validador
+    function _validatorPositionsLengthSlot(address validator) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(validator, ".validator.positions.length"));
+    }
+    function _validatorPositionSlot(address validator, uint256 index) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(validator, ".validator.positions.", index));
+    }
+    function getValidatorPositionsLength(address validator) public view returns (uint256) {
+        return StorageSlot.getUint256Slot(_validatorPositionsLengthSlot(validator)).value;
+    }
+    function getValidatorPosition(address validator, uint256 index) public view returns (uint256 positionId) {
+        if (index < getValidatorPositionsLength(validator)) {
+            return StorageSlot.getUint256Slot(_validatorPositionSlot(validator, index)).value;
+        }
+        return 0;
+    }
+    function pushValidatorPosition(address validator, uint256 positionId) internal {
+        uint256 len = getValidatorPositionsLength(validator);
+        StorageSlot.getUint256Slot(_validatorPositionSlot(validator, len)).value = positionId;
+        StorageSlot.getUint256Slot(_validatorPositionsLengthSlot(validator)).value = len + 1;
+    }
+    function setValidatorPosition(address validator, uint256 index, uint256 positionId) internal {
+        require(index < getValidatorPositionsLength(validator), "Index out of bounds");
+        StorageSlot.getUint256Slot(_validatorPositionSlot(validator, index)).value = positionId;
+    }
+    function deleteValidatorPosition(address validator, uint256 index) internal {
+        uint256 len = getValidatorPositionsLength(validator);
+        if (index < len) {
+            if (index != len - 1) {
+                // Move last element to the deleted slot
+                uint256 lastPosId = getValidatorPosition(validator, len - 1);
+                StorageSlot.getUint256Slot(_validatorPositionSlot(validator, index)).value = lastPosId;
+            }
+            // Delete last slot
+            StorageSlot.getUint256Slot(_validatorPositionSlot(validator, len - 1)).value = 0;
+            // Decrement length
+            StorageSlot.getUint256Slot(_validatorPositionsLengthSlot(validator)).value = len - 1;
+        }
     }
 
     /**
@@ -155,21 +194,7 @@ contract ValidatorLogic {
             sstore(add(baseSlot, 2), mload(add(position, 64)))     // timestamp
             sstore(add(baseSlot, 3), mload(add(position, 96)))     // bondingBlock
             sstore(add(baseSlot, 4), mload(add(position, 128)))    // lastWithdrawalTimestamp
-        }
-    }
-
-    /**
-     * @notice Set validator position
-     * @param validator Validator address
-     * @param index Index of the position
-     * @param positionId Position ID
-     */
-    function setValidatorPosition(address validator, uint256 index, uint256 positionId) internal {
-        bytes32 baseSlot = keccak256(abi.encodePacked(validator, VALIDATOR_POSITIONS_SLOT));
-        bytes32 indexSlot = keccak256(abi.encodePacked(baseSlot));
-        indexSlot = bytes32(uint256(indexSlot) + index);
-        assembly {
-            sstore(indexSlot, positionId)
+            sstore(add(baseSlot, 5), mload(add(position, 160)))    // description
         }
     }
 
@@ -181,36 +206,22 @@ contract ValidatorLogic {
         StorageSlot.getUint256Slot(TOTAL_POSITIONS_SLOT).value = newTotal;
     }
 
-    // ---------------------------------- GETTERS FOR SLOTS ----------------------------------
-
     /**
      * @notice Get staking position
      * @param id Position ID
      * @return position Staking position
      */
     function getStakingPosition(uint256 id) public view returns (StakingPosition memory position) {
-        bytes32 slot = keccak256(abi.encodePacked(id, STAKING_POSITIONS_SLOT));
-        assembly {
-            position := sload(slot)
-        }
-    }
-
-    /**
-     * @notice Get validator position
-     * @param validator Validator address
-     * @param index Index of the position
-     * @return positionId Position ID
-     */
-    function getValidatorPosition(address validator, uint256 index) public view returns (uint256 positionId) {
-        // Step 1: Find storage slot of the array's length
-        bytes32 baseSlot = keccak256(abi.encodePacked(validator, VALIDATOR_POSITIONS_SLOT));
-        // Step 2: Use dynamic array layout
-        bytes32 indexSlot = keccak256(abi.encodePacked(baseSlot));
-        indexSlot = bytes32(uint256(indexSlot) + index); // array[index]
-
-        assembly {
-            positionId := sload(indexSlot)
-        }
+        bytes32 baseSlot = keccak256(abi.encodePacked(id, STAKING_POSITIONS_SLOT));
+        
+        // Load each field individually using StorageSlot
+        position.id = StorageSlot.getUint256Slot(baseSlot).value;
+        position.amount = StorageSlot.getUint256Slot(bytes32(uint256(baseSlot) + 1)).value;
+        position.timestamp = StorageSlot.getUint256Slot(bytes32(uint256(baseSlot) + 2)).value;
+        position.bondingBlock = StorageSlot.getUint256Slot(bytes32(uint256(baseSlot) + 3)).value;
+        position.lastWithdrawalTimestamp = StorageSlot.getUint256Slot(bytes32(uint256(baseSlot) + 4)).value;
+        bytes32 descriptionBytes = StorageSlot.getBytes32Slot(bytes32(uint256(baseSlot) + 5)).value;
+        position.description = string(abi.encodePacked(descriptionBytes));
     }
 
     /**
@@ -281,7 +292,7 @@ contract ValidatorLogic {
      * @param description Position description
      * @return positionId ID of the created position
      */
-    function _createStakingPosition(address owner, uint256 amount) internal returns (uint256 positionId) {
+    function _createStakingPosition(address owner, uint256 amount, string memory description) internal returns (uint256 positionId) {
         uint256 total = getTotalPositions();
         positionId = total + 1;
         setTotalPositions(positionId);
@@ -291,20 +302,13 @@ contract ValidatorLogic {
             amount: amount,
             timestamp: block.timestamp,
             bondingBlock: block.number,
-            lastWithdrawalTimestamp: block.timestamp
+            lastWithdrawalTimestamp: block.timestamp,
+            description: description
         });
 
         setStakingPosition(positionId, position);
-
-        uint256 index = 0;
-        while (true) {
-            if (getValidatorPosition(owner, index) == 0) {
-                break;
-            }
-            index++;
-        }
-        setValidatorPosition(owner, index, positionId);
-
+        pushValidatorPosition(owner, positionId);
+        console.log("create posId", positionId, "amount", amount);
         emit StakingPositionCreated(owner, positionId, amount);
         return positionId;
     }
@@ -317,31 +321,40 @@ contract ValidatorLogic {
      * @return totalUnstaked The actual amount unstaked
      */
     function _unstake(address validator, uint256 amount, uint256 stakeSlot) internal returns (uint256 totalUnstaked) {
-        uint256 totalPositions = getTotalPositions();
+        uint256 totalPositions = getValidatorPositionsLength(validator);
         uint256 remaining = amount;
         uint256 unstaked = 0;
+        console.log("totalPositions", totalPositions);
 
         // LIFO: start from the last position
         for (uint256 i = totalPositions; i > 0 && remaining > 0;) {
             uint256 posId = getValidatorPosition(validator, i - 1);
+            console.log("index", i - 1);
+            console.log("posId", posId);
             if (posId == 0) {
                 unchecked { i--; }
                 continue;
             }
             StakingPosition memory pos = getStakingPosition(posId);
+            console.log("pos.amount before", pos.amount);
             if (pos.amount == 0) {
+                // Remove this position from the array to avoid stale posIds
+                deleteValidatorPosition(validator, i - 1);
                 unchecked { i--; }
                 continue;
             }
 
             uint256 toUnstake = pos.amount > remaining ? remaining : pos.amount;
+            console.log("toUnstake", toUnstake);
             pos.amount -= toUnstake;
             remaining -= toUnstake;
             unstaked += toUnstake;
+            console.log("pos.amount after", pos.amount);
+            console.log("remaining", remaining);
 
             if (pos.amount == 0) {
                 _deleteStakingPosition(posId);
-                _deleteValidatorPosition(validator, i - 1);
+                deleteValidatorPosition(validator, i - 1);
                 emit StakingPositionClosed(validator, posId, toUnstake);
             } else {
                 pos.lastWithdrawalTimestamp = block.timestamp;
@@ -360,13 +373,13 @@ contract ValidatorLogic {
      * @dev Delete a staking position from storage (sets all fields to zero)
      */
     function _deleteStakingPosition(uint256 posId) internal {
-        setStakingPosition(posId, StakingPosition(0,0,0,0,0));
+        setStakingPosition(posId, StakingPosition(0,0,0,0,0, ""));
     }
 
     /**
      * @dev Delete a validator position from the validator's array (sets to zero)
      */
     function _deleteValidatorPosition(address validator, uint256 index) internal {
-        setValidatorPosition(validator, index, 0);
+        deleteValidatorPosition(validator, index);
     }
 }

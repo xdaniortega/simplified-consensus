@@ -42,7 +42,7 @@ contract ValidatorFactory is ReentrancyGuard {
     mapping(address => address) public validatorToProxy; // user to proxy
     mapping(address => bool) public isValidator;
     address[] public validators;
-
+    
     // Custom errors
     error SenderNotValidator();
     error InsufficientStakeAmount();
@@ -71,14 +71,20 @@ contract ValidatorFactory is ReentrancyGuard {
      * @dev Stake tokens as a validator. Deploys proxy if not already present.
      */
     function stake(uint256 amount) external nonReentrant {
-        require(amount >= minimumStake, "Stake below minimum");
-        require(!isValidator[msg.sender], "Already validator");
-        require(validators.length < maxValidators, "Max validators reached");
+        if(amount < minimumStake) {
+            revert InsufficientStakeAmount();
+        }
+        if(isValidator[msg.sender]) {
+            revert AlreadyValidator();
+        }
+        if(validators.length >= maxValidators) {
+            revert MaxValidatorsReached();
+        }
 
         // Compute proxy address
         address proxy = computeProxyAddress(msg.sender, amount);
         // Pre-fund the proxy
-        require(stakingToken.transferFrom(msg.sender, proxy, amount), "Transfer failed");
+        stakingToken.safeTransferFrom(msg.sender, proxy, amount);
 
         // Deploy proxy with CREATE2
         bytes memory data = abi.encodeWithSelector(
@@ -107,19 +113,22 @@ contract ValidatorFactory is ReentrancyGuard {
      */
     function unstake(uint256 amount) external nonReentrant onlyValidator {
         address proxy = validatorToProxy[msg.sender];
-        uint256 unstaked = ValidatorLogic(proxy).unstake(amount);
-        require(stakingToken.transfer(msg.sender, unstaked), "Transfer failed");
-        emit Unstaked(msg.sender, unstaked);
+        uint256 currentStake = ValidatorLogic(proxy).getStakeAmount();
 
-        uint256 remainingStake = ValidatorLogic(proxy).getStakeAmount();
-        if (remainingStake < minimumStake && remainingStake > 0) {
-            // Unstake the residual below minimum
-            uint256 residual = remainingStake;
-            uint256 unstakedResidual = ValidatorLogic(proxy).unstake(residual);
-            require(stakingToken.transfer(msg.sender, unstakedResidual), "Transfer failed");
-            emit Unstaked(msg.sender, unstakedResidual);
-            remainingStake = 0;
+        if(currentStake < amount) {
+            revert InsufficientStakeAmount();
         }
+
+        if(currentStake - amount < minimumStake) {
+            amount = currentStake;
+        }
+        
+        uint256 unstaked = ValidatorLogic(proxy).unstake(amount);
+        if (unstaked > 0) {
+            emit Unstaked(msg.sender, unstaked);
+        }
+        
+        uint256 remainingStake = ValidatorLogic(proxy).getStakeAmount();
         if (remainingStake == 0) {
             _removeValidatorFromArray(msg.sender);
             isValidator[msg.sender] = false;
@@ -228,7 +237,7 @@ contract ValidatorFactory is ReentrancyGuard {
         
         return i;
     }
-
+    
     /**
      * @dev Get all validators
      * @return allValidators Array of all validator addresses
@@ -236,7 +245,7 @@ contract ValidatorFactory is ReentrancyGuard {
     function getAllValidators() external view returns (address[] memory) {
         return validators;
     }
-
+    
     /**
      * @dev Get validator count
      * @return count Number of validators
@@ -244,7 +253,7 @@ contract ValidatorFactory is ReentrancyGuard {
     function getValidatorCount() external view returns (uint256) {
         return validators.length;
     }
-
+    
     /**
      * @dev Check if address is validator
      * @param validator Address to check
@@ -264,7 +273,7 @@ contract ValidatorFactory is ReentrancyGuard {
         address proxy = validatorToProxy[validator];
         return ValidatorLogic(proxy).getStakeAmount();
     }
-
+    
     /**
      * @dev Check if validator can unstake (bonding period expired)
      * @param validator Validator address

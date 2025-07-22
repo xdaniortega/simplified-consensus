@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../src/StakingManager.sol";
-import "../src/ValidatorLogic.sol";
+import "../src/staking/StakingManager.sol";
+import "../src/staking/ValidatorLogic.sol";
 import "../test/mock/ERC20TokenMock.sol";
 import "forge-std/Test.sol";
 

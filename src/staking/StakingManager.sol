@@ -138,7 +138,8 @@ contract StakingManager is ReentrancyGuard {
     }
 
     /**
-     * @dev Get top N validators by stake using simple sorting
+     * @dev Get top N validators by stake using optimized partial selection sort
+     * @dev Complexity: O(n*k) where n=total validators, k=count (much better than O(n²) full sort)
      * @param count Number of validators to return
      * @return topValidators Array of validator addresses sorted by stake (descending)
      * @return topStakes Array of corresponding stake amounts
@@ -163,20 +164,30 @@ contract StakingManager is ReentrancyGuard {
             allStakes[i] = getValidatorStake(validators[i]);
         }
 
-        // Simple bubble sort (efficient for small arrays)
-        for (uint256 i = 0; i < totalValidators - 1; i++) {
-            for (uint256 j = 0; j < totalValidators - i - 1; j++) {
-                if (allStakes[j] < allStakes[j + 1]) {
-                    // Swap stakes
-                    uint256 tempStake = allStakes[j];
-                    allStakes[j] = allStakes[j + 1];
-                    allStakes[j + 1] = tempStake;
+        // Optimized partial selection sort - O(n * k) complexity
+        // Only sorts the first 'actualCount' positions, much more efficient than full sort
+        // Otherwise we could do bubble sort, but it would be O(n²) complexity
+        for (uint256 i = 0; i < actualCount; i++) {
+            uint256 maxIndex = i;
 
-                    // Swap validators
-                    address tempValidator = allValidators[j];
-                    allValidators[j] = allValidators[j + 1];
-                    allValidators[j + 1] = tempValidator;
+            // Find the validator with maximum stake in remaining unsorted portion
+            for (uint256 j = i + 1; j < totalValidators; j++) {
+                if (allStakes[j] > allStakes[maxIndex]) {
+                    maxIndex = j;
                 }
+            }
+
+            // Swap the maximum to position i (if it's not already there)
+            if (maxIndex != i) {
+                // Swap stakes
+                uint256 tempStake = allStakes[i];
+                allStakes[i] = allStakes[maxIndex];
+                allStakes[maxIndex] = tempStake;
+
+                // Swap validators
+                address tempValidator = allValidators[i];
+                allValidators[i] = allValidators[maxIndex];
+                allValidators[maxIndex] = tempValidator;
             }
         }
 
@@ -275,6 +286,13 @@ contract StakingManager is ReentrancyGuard {
             isValidator[validator] = false;
             emit ValidatorRemoved(validator);
         }
+    }
+
+    function distributeRewards(uint256 amount, address validator) external {
+        if(!isValidator[validator]) revert NotAValidator();
+        address proxy = validatorToProxy[validator];
+        if(proxy == address(0)) revert ValidatorProxyNotFound();
+        ValidatorLogic(proxy).stake(amount);
     }
 
     // ---------------------------------- INTERNAL FUNCTIONS ----------------------------------

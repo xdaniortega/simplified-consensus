@@ -232,11 +232,11 @@ contract ValidatorLogic {
     /**
      * @dev Get validator information
      * @return owner Validator owner address
-     * @return stake Current stake amount
+     * @return stakeAmount Current stake amount
      */
-    function getValidatorInfo() external view returns (address owner, uint256 stake) {
+    function getValidatorInfo() external view returns (address owner, uint256 stakeAmount) {
         owner = StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value;
-        stake = StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
+        stakeAmount = StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
     }
 
     /**

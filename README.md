@@ -1,69 +1,34 @@
-# Simplified Consensus System
+# GenLayer Solidity Challenge - Simplified Optimistic Consensus
 
-> A comprehensive implementation of an optimistic consensus mechanism with centralized state management, featuring LLM-based transaction validation, validator staking, and dispute resolution.
-
-## Table of Contents
-
-- [Getting Started](#getting-started)
-- [Architecture Overview](#architecture-overview)
-- [Security Report](#security-report)
-- [Core Components](#core-components)
-- [Design Philosophy](#design-philosophy)
-- [Test Suite](#test-suite)
-- [Usage Examples](#usage-examples)
-- [Security Considerations](#security-considerations)
-- [Future Extensions](#future-extensions)
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- [Foundry](https://book.getfoundry.sh/getting-started/installation)
-- [Node.js](https://nodejs.org/) (for additional tooling)
-- Git
-
-### Installation
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd simplified-consensus
-
-# Install dependencies
-yarn install
-
-# Build the project
-forge build
-
-# Run tests
-forge test
-
-# Check test coverage
-forge coverage
-```
-
-### Quick Start
-
-```bash
-# Compile and test
-forge build
-forge test
-
-# Run specific test suites
-forge test --match-contract TransactionManagerTest
-forge test --match-contract StakingManagerTest  
-forge test --match-contract PoSConsensusTest
-forge test --match-contract DisputeManagerTest
-
-# Check coverage (should be 80%+ on all metrics)
-forge coverage
-```
+> ⚠️ **SECURITY WARNING - PENDING CRITICAL FIXES**
+> 
+> The following security issues remain unresolved due to time constraints:
+> 
+> **DoS Protection - External calls in loops**
+> - Add MAX_VALIDATORS = 50 limits in loops
+> - Implement batch processing for multiple validators  
+> - Circuit breakers for emergency pause
+> 
+> **Enum Comparison Safety**
+> - Replace direct equality with explicit state checks
+> - Comprehensive state validation
+> 
+> **Complete CEI Pattern**
+> - Move ALL events before external calls
+> - Verify order in _finalizeProposal() and slashValidator()
+> 
+> **Edge Case Handling**
+> - Handle when insufficient validators available
+> - What happens if all validators are slashed
+> - Recovery mechanisms for inconsistent states
+> 
+> **Parameter Validation**  
+> - Verify valid ranges for SLASH_PERCENTAGE, CONSENSUS_THRESHOLD
+> - Prevent division by zero in reward distribution
 
 ---
 
-## Architecture Overview
+## Overview
 
 The system implements a **centralized state inbox** approach with **modular consensus mechanisms**, featuring:
 

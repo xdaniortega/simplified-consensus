@@ -67,11 +67,11 @@ contract DisputeManager is ReentrancyGuard {
     // ==================== STRUCTS ====================
 
     struct DisputeData {
-        DisputeState state;
-        uint256 deadline; // Challenge or voting deadline
-        address[] selectedValidators; // Validators for this proposal
-        bool initialized;
-        address challenger;
+        DisputeState state; // 1 byte - Current dispute state enum
+        bool initialized; // 1 byte - Whether this dispute has been initialized
+        address challenger; // 20 bytes - Address that initiated the challenge
+        uint256 deadline; // 32 bytes - Challenge or voting deadline
+        address[] selectedValidators; // 32 bytes - Validators for this proposal
     }
 
     // Optimized voting data structure using bitmaps
@@ -144,10 +144,10 @@ contract DisputeManager is ReentrancyGuard {
 
         disputeData[proposalId] = DisputeData({
             state: DisputeState.Disputed,
-            deadline: block.number + challengePeriod,
-            selectedValidators: selectedValidators,
             initialized: true,
-            challenger: _challenger
+            challenger: _challenger,
+            deadline: block.number + challengePeriod,
+            selectedValidators: selectedValidators
         });
     }
 

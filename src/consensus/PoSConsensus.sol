@@ -57,10 +57,10 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
 
     // ==================== STRUCTS ====================
     struct PoSData {
-        address transactionManager; // Transaction manager that initialized this proposal
-        uint8 signatureCount; // Number of validator signatures collected
-        bool initialized; // Whether this proposal has been initialized in PoS
-        address[] validators; // Validators that chosen for the proposal
+        uint8 signatureCount; // 1 byte - Number of validator signatures collected (max 255)
+        bool initialized; // 1 byte - Whether this proposal has been initialized in PoS
+        address transactionManager; // 20 bytes - Transaction manager that initialized this proposal
+        address[] validators; // 32 bytes - Validators that chosen for the proposal
     }
 
     // ==================== STATE VARIABLES ====================
@@ -147,9 +147,9 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
 
         // Initialize PoS data, assign validators to the proposal
         posData[proposalId] = PoSData({
-            transactionManager: msg.sender,
             signatureCount: 0,
             initialized: true,
+            transactionManager: msg.sender,
             validators: topValidators
         });
 

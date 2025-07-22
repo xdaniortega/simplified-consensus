@@ -1,42 +1,17 @@
-# GenLayer Solidity Challenge - Simplified Optimistic Consensus
-
-> ⚠️ **SECURITY WARNING - PENDING CRITICAL FIXES**
-> 
-> The following security issues remain unresolved due to time constraints:
-> 
-> **DoS Protection - External calls in loops**
-> - Add MAX_VALIDATORS = 50 limits in loops
-> - Implement batch processing for multiple validators  
-> - Circuit breakers for emergency pause
-> 
-> **Enum Comparison Safety**
-> - Replace direct equality with explicit state checks
-> - Comprehensive state validation
-> 
-> **Complete CEI Pattern**
-> - Move ALL events before external calls
-> - Verify order in _finalizeProposal() and slashValidator()
-> 
-> **Edge Case Handling**
-> - Handle when insufficient validators available
-> - What happens if all validators are slashed
-> - Recovery mechanisms for inconsistent states
-> 
-> **Parameter Validation**  
-> - Verify valid ranges for SLASH_PERCENTAGE, CONSENSUS_THRESHOLD
-> - Prevent division by zero in reward distribution
-
+# Simplified Optimistic Consensus
 ---
 
 ## Overview
 
-The system implements a **centralized state inbox** approach with **modular consensus mechanisms**, featuring:
+The system implements a **state inbox** approach with **modular consensus mechanisms**, featuring:
 
 - **Centralized State**: `TransactionManager` as the single source of truth for all proposal states
 - **Optimistic Execution**: Transactions are assumed valid unless challenged
 - **LLM Integration**: Mock LLM oracle for transaction validation
 - **Validator Staking**: Delegated Proof-of-Stake with individual validator contracts
 - **Dispute Resolution**: Economic challenge-response mechanism with slashing
+
+All state, validations and challenges resolution will bubble-up to change the state into transaction manager that acts as an input box of transactions.
 
 ### System Architecture Diagram
 
@@ -81,6 +56,34 @@ The system implements a **centralized state inbox** approach with **modular cons
 # Security Report
 
 I acknowledge some errors found in REPORT file, please visit it in the root folder.
+
+
+> ⚠️ **SECURITY WARNING - PENDING CRITICAL FIXES**
+> 
+> The following security issues remain unresolved due to time constraints:
+> 
+> **DoS Protection - External calls in loops**
+> - Add MAX_VALIDATORS = 50 limits in loops
+> - Implement batch processing for multiple validators  
+> - Circuit breakers for emergency pause
+> 
+> **Enum Comparison Safety**
+> - Replace direct equality with explicit state checks
+> - Comprehensive state validation
+> 
+> **Complete CEI Pattern**
+> - Move ALL events before external calls
+> - Verify order in _finalizeProposal() and slashValidator()
+> 
+> **Edge Case Handling**
+> - Handle when insufficient validators available
+> - What happens if all validators are slashed
+> - Recovery mechanisms for inconsistent states
+> 
+> **Parameter Validation**  
+> - Verify valid ranges for SLASH_PERCENTAGE, CONSENSUS_THRESHOLD
+> - Prevent division by zero in reward distribution
+
 
 ## Core Components
 

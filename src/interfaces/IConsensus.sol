@@ -93,6 +93,22 @@ interface IConsensus {
      */
     function submitVote(bytes32 proposalId, address voter, bool support, bytes calldata signature) external;
 
+    // ==================== STATUS QUERY FUNCTIONS ====================
+
+    /**
+     * @dev Get current status of a proposal
+     * @param proposalId Proposal identifier
+     * @return status Current proposal status
+     */
+    function getProposalStatus(bytes32 proposalId) external view returns (ProposalStatus status);
+
+    /**
+     * @dev Check if proposal has an active dispute
+     * @param proposalId Proposal identifier
+     * @return hasDispute Whether the proposal has an active dispute
+     */
+    function hasActiveDispute(bytes32 proposalId) external view returns (bool hasDispute);
+
     // ==================== INFO FUNCTIONS ====================
 
     /**

@@ -289,9 +289,9 @@ contract StakingManager is ReentrancyGuard {
     }
 
     function distributeRewards(uint256 amount, address validator) external {
-        if(!isValidator[validator]) revert NotAValidator();
+        if (!isValidator[validator]) revert NotAValidator();
         address proxy = validatorToProxy[validator];
-        if(proxy == address(0)) revert ValidatorProxyNotFound();
+        if (proxy == address(0)) revert ValidatorProxyNotFound();
         ValidatorLogic(proxy).stake(amount);
     }
 

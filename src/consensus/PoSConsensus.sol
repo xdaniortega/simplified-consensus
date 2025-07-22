@@ -1,20 +1,26 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "../interfaces/IConsensus.sol";
 import "../interfaces/ITransactionManager.sol";
-import "../staking/StakingManager.sol";
 import "./DisputeManager.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "../staking/StakingManager.sol";
 
 /**
  * @title PoSConsensus
- * @notice Proof of Stake consensus implementation using validator signatures and optional disputes
- * @dev Implements IConsensus interface, deploys and manages StakingManager and DisputeManager
+ * @dev Proof of Stake consensus mechanism implementation
+ * @notice Implements consensus logic with validator selection, signature collection,
+ *         and dispute resolution for transaction approval
  */
 contract PoSConsensus is IConsensus, ReentrancyGuard {
     // ==================== EVENTS ====================
+
+    /**
+     * @dev Emitted when a proposal is initialized
+     * @param proposalId The unique identifier of the proposal
+     * @param proposer The address that submitted the proposal
+     */
     event ProposalInitialized(bytes32 indexed proposalId, address indexed proposer);
     event ProposalFinalized(bytes32 indexed proposalId, bool approved);
     event ChallengeInitiated(bytes32 indexed proposalId, address indexed challenger);
@@ -48,10 +54,6 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
     error OnlyAssociatedDispute();
 
     // ==================== STRUCTS ====================
-    /**
-     * @dev PoS-specific proposal data
-     * @notice Contains PoS consensus specific fields and the transaction manager that initialized it
-     */
     struct PoSData {
         address transactionManager; // Transaction manager that initialized this proposal
         uint8 signatureCount; // Number of validator signatures collected
@@ -64,26 +66,27 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
     StakingManager public immutable stakingManager;
     DisputeManager public immutable disputeManager;
 
+    /// @dev Duration in blocks for challenge period after consensus
+    uint256 public immutable CHALLENGE_PERIOD;
+    /// @dev Percentage to slash validators (10%)
+    uint256 public immutable SLASH_PERCENTAGE;
+    /// @dev Number of validators required to reach consensus
+    uint256 public immutable CONSENSUS_THRESHOLD;
+    /// @dev Number of validators required to reach consensus
+    uint256 public immutable VALIDATOR_SET_SIZE;
+
+    /// @dev Mapping of proposal IDs to their PoS consensus data
     mapping(bytes32 => PoSData) public posData;
+    /// @dev Mapping to track which validators have signed each proposal
     mapping(bytes32 => mapping(address => bool)) public hasValidatorSigned;
+    /// @dev Mapping of proposal IDs to arrays of signers
     mapping(bytes32 => address[]) public proposalSigners;
 
-    uint256 public immutable CHALLENGE_PERIOD; // blocks for challenge period
-    uint8 public immutable REQUIRED_SIGNATURES; // required validator signatures
-    uint8 public immutable VALIDATOR_SET_SIZE; // top validators for consensus
-    uint8 public immutable SLASH_PERCENTAGE; // percentage slash for false challenges
     // ==================== MODIFIERS ====================
 
     modifier onlyAssociatedDisputeManager() {
         if (msg.sender != address(disputeManager)) {
             revert OnlyAssociatedDispute();
-        }
-        _;
-    }
-
-    modifier onlyValidator() {
-        if (!stakingManager.isValidator(msg.sender)) {
-            revert NotAValidator();
         }
         _;
     }
@@ -113,7 +116,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
 
         // Set immutable configuration
         CHALLENGE_PERIOD = _challengePeriod;
-        REQUIRED_SIGNATURES = _requiredSignatures;
+        CONSENSUS_THRESHOLD = _requiredSignatures;
         VALIDATOR_SET_SIZE = _validatorSetSize;
         SLASH_PERCENTAGE = _slashPercentage;
 
@@ -138,7 +141,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
 
         // Get top validators for this proposal
         address[] memory topValidators = _getTopValidators();
-        if (topValidators.length < REQUIRED_SIGNATURES) revert NotEnoughValidators();
+        if (topValidators.length < CONSENSUS_THRESHOLD) revert NotEnoughValidators();
 
         // Initialize PoS data, assign validators to the proposal
         posData[proposalId] = PoSData({
@@ -159,9 +162,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
      * 2. Dispute was resolved
      * Anyone can finalize a proposal if it has enough signatures or if the dispute is resolved but has not been finalized
      */
-    function finalizeConsensus(
-        bytes32 proposalId
-    ) external nonReentrant {
+    function finalizeConsensus(bytes32 proposalId) external nonReentrant {
         _finalizeProposal(proposalId);
     }
 
@@ -169,19 +170,20 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
     /**
      * @dev Submit a challenge against a proposal
      */
-         function challengeProposal(
-         bytes32 proposalId
-     ) external nonReentrant {
+    function challengeProposal(bytes32 proposalId) external nonReentrant {
         if (!posData[proposalId].initialized) revert ProposalNotFound();
-        if(!_isSelectedValidator(proposalId, msg.sender)) revert NotASelectedValidator();
-        if(!_canBeChallenge(proposalId)) revert InvalidProposalState();
-        if(_isDisputeActive(proposalId)) revert DisputeActive();
+        if (!_isSelectedValidator(proposalId, msg.sender)) revert NotASelectedValidator();
+        if (_isDisputeActive(proposalId)) revert DisputeActive();
+        if (!_canBeChallenge(proposalId)) revert InvalidProposalState();
 
         // Initialize dispute mechanism (only when actually challenged)
         disputeManager.initializeDispute(proposalId, posData[proposalId].validators, CHALLENGE_PERIOD, msg.sender);
 
-        ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(proposalId, IConsensus.ProposalStatus.Challenged);
-        
+        ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(
+            proposalId,
+            IConsensus.ProposalStatus.Challenged
+        );
+
         emit ChallengeInitiated(proposalId, msg.sender);
     }
 
@@ -198,8 +200,9 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
     function submitVote(bytes32 proposalId, address voter, bool support, bytes calldata signature) external {
         if (!posData[proposalId].initialized) revert ProposalNotFound();
 
-        DisputeManager.DisputeState disputeState = disputeManager.getDisputeState(proposalId);
-        if (disputeState != DisputeManager.DisputeState.Disputed) revert InvalidProposalState();
+        // Check if there's actually an active dispute - use isInVotingPeriod to verify
+        // both that the dispute is initialized AND in the correct state
+        if (!disputeManager.isInVotingPeriod(proposalId)) revert InvalidProposalState();
 
         // Delegate to dispute manager
         disputeManager.submitVote(proposalId, voter, support, signature);
@@ -213,14 +216,13 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         if (!posData[proposalId].initialized) revert ProposalNotFound();
         if (!stakingManager.isValidator(msg.sender)) revert NotAValidator();
 
-        DisputeManager.DisputeState disputeState = disputeManager.getDisputeState(proposalId);
-        if (disputeState != DisputeManager.DisputeState.Disputed) revert InvalidProposalState();
+        // Check if there's actually an active dispute - use isInVotingPeriod to verify
+        // both that the dispute is initialized AND in the correct state
+        if (!disputeManager.isInVotingPeriod(proposalId)) revert InvalidProposalState();
 
         // Delegate to dispute manager - it will call back onDisputeResolved
         disputeManager.resolveDispute(proposalId);
     }
-
-
 
     // ==================== SIGNATURE COLLECTION ====================
 
@@ -233,15 +235,15 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         if (!posData[proposalId].initialized) revert ProposalNotFound();
 
         // Can't sign if proposal is already finalized
-        if (posData[proposalId].signatureCount >= REQUIRED_SIGNATURES) {
+        if (posData[proposalId].signatureCount >= CONSENSUS_THRESHOLD) {
             revert InvalidProposalState();
         }
-        
+
         // Can't sign if proposal is actively being disputed
-        if (disputeManager.getDisputeState(proposalId) == DisputeManager.DisputeState.Disputed) {
+        if (_isDisputeActive(proposalId)) {
             revert InvalidProposalState();
         }
-        
+
         if (hasValidatorSigned[proposalId][msg.sender]) revert AlreadySigned();
 
         // Verify that sender is one of the selected validators for this proposal
@@ -261,14 +263,12 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         emit SignatureReceived(proposalId, msg.sender, posData[proposalId].signatureCount);
 
         // Check if consensus is reached
-        if (posData[proposalId].signatureCount >= REQUIRED_SIGNATURES) {
+        if (posData[proposalId].signatureCount >= CONSENSUS_THRESHOLD) {
             emit ConsensusReached(proposalId, proposalSigners[proposalId]);
         }
 
         _finalizeProposal(proposalId);
     }
-
-
 
     // ==================== VALIDATOR FUNCTIONS ====================
 
@@ -390,14 +390,103 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         return proposalSigners[proposalId];
     }
 
+    /**
+     * @dev Get current status of a proposal (IConsensus interface method)
+     * @dev Delegates to TransactionManager for the authoritative state
+     */
+    function getProposalStatus(bytes32 proposalId) external view returns (ProposalStatus status) {
+        if (!posData[proposalId].initialized) {
+            return ProposalStatus.Proposed;
+        }
+
+        // Get the authoritative status from TransactionManager
+        address transactionManager = posData[proposalId].transactionManager;
+        return ITransactionManager(transactionManager).getProposalStatus(proposalId);
+    }
+
+    /**
+     * @dev Get current dispute state for a proposal
+     * @dev Returns the dispute state if a dispute exists, reverts if no dispute initialized
+     */
+    function getDisputeState(bytes32 proposalId) external view returns (DisputeManager.DisputeState) {
+        return disputeManager.getDisputeState(proposalId);
+    }
+
+    /**
+     * @dev Check if proposal has an active dispute
+     */
+    function hasActiveDispute(bytes32 proposalId) external view returns (bool) {
+        if (!posData[proposalId].initialized) {
+            return false;
+        }
+
+        try disputeManager.getDisputeState(proposalId) returns (DisputeManager.DisputeState disputeState) {
+            return disputeState == DisputeManager.DisputeState.Disputed;
+        } catch {
+            return false; // No dispute initialized
+        }
+    }
+
+    /**
+     * @dev Check if a proposal can be finalized (IConsensus interface method)
+     */
+    function canFinalizeProposal(bytes32 proposalId) external view returns (bool canFinalize) {
+        if (!posData[proposalId].initialized) return false;
+
+        // Can finalize if has enough signatures OR if dispute is resolved
+        if (posData[proposalId].signatureCount >= CONSENSUS_THRESHOLD) {
+            return true;
+        }
+
+        // Check if dispute is resolved
+        try disputeManager.getDisputeState(proposalId) returns (DisputeManager.DisputeState disputeState) {
+            return
+                disputeState == DisputeManager.DisputeState.Upheld ||
+                disputeState == DisputeManager.DisputeState.Overturned;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * @dev Finalize a proposal (IConsensus interface method)
+     */
+    function finalizeProposal(bytes32 proposalId) external returns (bool approved) {
+        _finalizeProposal(proposalId);
+        return posData[proposalId].signatureCount >= CONSENSUS_THRESHOLD;
+    }
+
+    /**
+     * @dev Challenge a proposal (IConsensus interface method with challenger parameter)
+     */
+    function challengeProposal(bytes32 proposalId, address challenger) external {
+        if (!posData[proposalId].initialized) revert ProposalNotFound();
+        if (!_isSelectedValidator(proposalId, challenger)) revert NotASelectedValidator();
+        if (!_canBeChallenge(proposalId)) revert InvalidProposalState();
+        if (_isDisputeActive(proposalId)) revert DisputeActive();
+
+        // Initialize dispute mechanism (only when actually challenged)
+        disputeManager.initializeDispute(proposalId, posData[proposalId].validators, CHALLENGE_PERIOD, challenger);
+
+        ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(
+            proposalId,
+            IConsensus.ProposalStatus.Challenged
+        );
+
+        emit ChallengeInitiated(proposalId, challenger);
+    }
+
     // ==================== INTERNAL FUNCTIONS ====================
 
     function _finalizeProposal(bytes32 proposalId) internal {
         if (!posData[proposalId].initialized) revert ProposalNotFound();
 
         // Only finalize if we have enough signatures AND no active dispute
-        if (posData[proposalId].signatureCount >= REQUIRED_SIGNATURES && !_isDisputeActive(proposalId)) {
-            ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(proposalId, IConsensus.ProposalStatus.Finalized);
+        if (posData[proposalId].signatureCount >= CONSENSUS_THRESHOLD && !_isDisputeActive(proposalId)) {
+            ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(
+                proposalId,
+                IConsensus.ProposalStatus.Finalized
+            );
             emit ProposalStateUpdatedByConsensus(proposalId, IConsensus.ProposalStatus.Finalized);
         }
         // If not enough signatures, just return without doing anything (allow more signatures)
@@ -408,7 +497,11 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         // Also if the proposal is challenged, it cannot be challenged again
         address transactionManager = posData[proposalId].transactionManager;
         uint256 blockNumber = ITransactionManager(transactionManager).getProposalBlockNumber(proposalId);
-        if (block.number > blockNumber + CHALLENGE_PERIOD || ITransactionManager(transactionManager).getProposalStatus(proposalId) == IConsensus.ProposalStatus.Challenged) {
+        if (
+            block.number > blockNumber + CHALLENGE_PERIOD ||
+            ITransactionManager(transactionManager).getProposalStatus(proposalId) ==
+            IConsensus.ProposalStatus.Challenged
+        ) {
             return false;
         }
 
@@ -444,25 +537,28 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
 
         uint256 slashAmount = 0;
         address transactionManager = posData[proposalId].transactionManager;
-        
+
         if (!upheld) {
             // Challenge was successful - proposal is rejected/overturned
             // Slash all who submitted signatures for invalid proposal
-             for (uint256 i = 0; i < proposalSigners[proposalId].length; i++) {
-                 address validator = proposalSigners[proposalId][i];
-                 if(validator == challenger) continue;
-                 uint256 validatorStake = stakingManager.getValidatorStake(validator);
-                 if (validatorStake > 0) {
-                     uint256 validatorSlashAmount = (validatorStake * SLASH_PERCENTAGE) / 100;
-                     stakingManager.slashValidator(validator, validatorSlashAmount, "Invalid proposal approved");
-                     slashAmount += validatorSlashAmount; // Accumulate total slash amount
-                 }
-             }
+            for (uint256 i = 0; i < proposalSigners[proposalId].length; i++) {
+                address validator = proposalSigners[proposalId][i];
+                if (validator == challenger) continue;
+                uint256 validatorStake = stakingManager.getValidatorStake(validator);
+                if (validatorStake > 0) {
+                    uint256 validatorSlashAmount = (validatorStake * SLASH_PERCENTAGE) / 100;
+                    stakingManager.slashValidator(validator, validatorSlashAmount, "Invalid proposal approved");
+                    slashAmount += validatorSlashAmount; // Accumulate total slash amount
+                }
+            }
             // Give rewards to honest challenger who detected invalid proposal
             if (slashAmount > 0) {
                 stakingManager.distributeRewards(slashAmount, challenger);
             }
-             ITransactionManager(transactionManager).updateProposalStatus(proposalId, IConsensus.ProposalStatus.Rejected);
+            ITransactionManager(transactionManager).updateProposalStatus(
+                proposalId,
+                IConsensus.ProposalStatus.Rejected
+            );
         } else {
             // Challenge failed - original decision upheld
             // Slash the challenger for false challenge
@@ -479,7 +575,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
                     recipientCount++;
                 }
             }
-            
+
             if (recipientCount > 0 && slashAmount > 0) {
                 uint256 rewardPerValidator = slashAmount / recipientCount;
                 for (uint256 i = 0; i < proposalSigners[proposalId].length; i++) {
@@ -488,7 +584,10 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
                     }
                 }
             }
-            ITransactionManager(transactionManager).updateProposalStatus(proposalId, IConsensus.ProposalStatus.Finalized);
+            ITransactionManager(transactionManager).updateProposalStatus(
+                proposalId,
+                IConsensus.ProposalStatus.Finalized
+            );
         }
 
         emit DisputeResolved(proposalId, upheld, challenger, slashAmount);

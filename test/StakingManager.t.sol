@@ -389,9 +389,10 @@ contract StakingManagerTest is Test {
         token.approve(address(factory), 2000);
         factory.stake(2000);
         address proxy = factory.validatorToProxy(alice);
+
         // Intenta stake extra (debe fallar porque solo el factory puede)
-        vm.expectRevert();
-        proxy.call(abi.encodeWithSignature("stake(uint256)", 1000));
+        vm.expectRevert(ValidatorLogic.NotFactory.selector);
+        ValidatorLogic(proxy).stake(1000);
         vm.stopPrank();
     }
 

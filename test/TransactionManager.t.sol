@@ -163,8 +163,8 @@ contract TransactionManagerTest is Test {
 
         string memory transaction1;
         string memory transaction2;
-        (transaction1, , , , , ) = transactionManager.getProposal(proposalId1);
-        (transaction2, , , , , ) = transactionManager.getProposal(proposalId2);
+        (transaction1, , , ) = transactionManager.getProposal(proposalId1);
+        (transaction2, , , ) = transactionManager.getProposal(proposalId2);
 
         assertEq(transaction1, tx1);
         assertEq(transaction2, tx2);
@@ -185,10 +185,10 @@ contract TransactionManagerTest is Test {
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
         vm.prank(alice);
-        transactionManager.challengeProposal(proposalId);
+        posConsensus.challengeProposal(proposalId);
 
         IConsensus.ProposalStatus status;
-        (, , , status, , ) = transactionManager.getProposal(proposalId);
+        (, , , status) = transactionManager.getProposal(proposalId);
         assertEq(uint8(status), uint8(IConsensus.ProposalStatus.Challenged));
 
         assertTrue(disputeManager.isInVotingPeriod(proposalId));
@@ -207,8 +207,8 @@ contract TransactionManagerTest is Test {
         posConsensus.signProposal(proposalId, signature);
 
         IConsensus.ProposalStatus status;
-        uint256 signatureCount;
-        (, , , status, signatureCount, ) = transactionManager.getProposal(proposalId);
+        (, , , status) = transactionManager.getProposal(proposalId);
+        uint256 signatureCount = posConsensus.getSignatureCount(proposalId);
 
         assertEq(signatureCount, 1);
         assertEq(uint8(status), uint8(IConsensus.ProposalStatus.OptimisticApproved));
@@ -228,8 +228,8 @@ contract TransactionManagerTest is Test {
         }
 
         IConsensus.ProposalStatus status;
-        uint256 signatureCount;
-        (, , , status, signatureCount, ) = transactionManager.getProposal(proposalId);
+        (, , , status) = transactionManager.getProposal(proposalId);
+        uint256 signatureCount = posConsensus.getSignatureCount(proposalId);
 
         assertEq(signatureCount, 3);
         assertEq(uint8(status), uint8(IConsensus.ProposalStatus.Finalized));
@@ -246,7 +246,7 @@ contract TransactionManagerTest is Test {
         }
 
         IConsensus.ProposalStatus status;
-        (, , , status, , ) = transactionManager.getProposal(proposalId);
+        (, , , status) = transactionManager.getProposal(proposalId);
         assertEq(uint8(status), uint8(IConsensus.ProposalStatus.Finalized));
         assertTrue(transactionManager.isProposalApproved(proposalId));
     }
@@ -265,6 +265,96 @@ contract TransactionManagerTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
+    // ==================== ADDITIONAL COVERAGE TESTS ====================
+
+    function test_Constructor_InvalidParameters() public {
+        // Test invalid consensus contract
+        vm.expectRevert(TransactionManager.InvalidConsensus.selector);
+        new TransactionManager(address(0), address(llmOracle));
+
+        // Test invalid oracle
+        vm.expectRevert(TransactionManager.InvalidLLMOracle.selector);
+        new TransactionManager(address(posConsensus), address(0));
+    }
+
+    function test_UpdateProposalStatus_OnlyConsensus() public {
+        vm.prank(alice);
+        bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
+
+        // Non-consensus contract should not be able to update status
+        vm.expectRevert(TransactionManager.InvalidConsensus.selector);
+        vm.prank(alice);
+        transactionManager.updateProposalStatus(proposalId, IConsensus.ProposalStatus.Finalized);
+    }
+
+    function test_UpdateProposalStatus_ProposalNotFound() public {
+        bytes32 nonExistentProposal = keccak256("nonexistent");
+
+        vm.expectRevert(TransactionManager.ProposalNotFound.selector);
+        vm.prank(address(posConsensus));
+        transactionManager.updateProposalStatus(nonExistentProposal, IConsensus.ProposalStatus.Finalized);
+    }
+
+    function test_GetProposalStatus_NonExistentProposal() public {
+        bytes32 nonExistentProposal = keccak256("nonexistent");
+
+        vm.expectRevert(TransactionManager.ProposalNotFound.selector);
+        transactionManager.getProposalStatus(nonExistentProposal);
+    }
+
+    function test_GetProposalBlockNumber_NonExistentProposal() public {
+        bytes32 nonExistentProposal = keccak256("nonexistent");
+
+        vm.expectRevert(TransactionManager.ProposalNotFound.selector);
+        transactionManager.getProposalBlockNumber(nonExistentProposal);
+    }
+
+    function test_ProposalLifecycle_AllStatuses() public {
+        vm.prank(alice);
+        bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
+
+        // After submitProposal, if LLM approves, it's OptimisticApproved
+        IConsensus.ProposalStatus status = transactionManager.getProposalStatus(proposalId);
+        assertEq(uint8(status), uint8(IConsensus.ProposalStatus.OptimisticApproved));
+
+        // Simulate Challenged
+        vm.prank(address(posConsensus));
+        transactionManager.updateProposalStatus(proposalId, IConsensus.ProposalStatus.Challenged);
+        status = transactionManager.getProposalStatus(proposalId);
+        assertEq(uint8(status), uint8(IConsensus.ProposalStatus.Challenged));
+
+        // Simulate Rejected
+        vm.prank(address(posConsensus));
+        transactionManager.updateProposalStatus(proposalId, IConsensus.ProposalStatus.Rejected);
+        status = transactionManager.getProposalStatus(proposalId);
+        assertEq(uint8(status), uint8(IConsensus.ProposalStatus.Rejected));
+    }
+
+    function test_GetProposer() public {
+        vm.prank(alice);
+        bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
+
+        // Check via proposals mapping
+        (, address proposer, , ) = transactionManager.proposals(proposalId);
+        assertEq(proposer, alice);
+    }
+
+    function test_Events() public {
+        // Test ProposalSubmitted event - check event is emitted with any proposalId
+        vm.expectEmit(false, false, false, true);
+        emit TransactionManager.ProposalSubmitted(bytes32(0), TEST_TRANSACTION, alice);
+
+        vm.prank(alice);
+        bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
+
+        // Test ProposalStatusUpdated event
+        vm.expectEmit(true, false, false, true);
+        emit TransactionManager.ProposalStatusUpdated(proposalId, IConsensus.ProposalStatus.Finalized);
+
+        vm.prank(address(posConsensus));
+        transactionManager.updateProposalStatus(proposalId, IConsensus.ProposalStatus.Finalized);
+    }
+
     // ==================== FUZZ TESTS ====================
 
     function testFuzz_ProposalSubmission(string calldata transaction) public {
@@ -273,7 +363,7 @@ contract TransactionManagerTest is Test {
 
         bytes32 proposalId = transactionManager.submitProposal(transaction);
 
-        (string memory storedTransaction, , , , , ) = transactionManager.getProposal(proposalId);
+        (string memory storedTransaction, , , ) = transactionManager.getProposal(proposalId);
         assertEq(storedTransaction, transaction);
     }
 }

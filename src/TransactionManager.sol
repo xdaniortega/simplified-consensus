@@ -93,10 +93,7 @@ contract TransactionManager is ReentrancyGuard {
         return proposalId;
     }
 
-    function updateProposalStatus(
-        bytes32 proposalId,
-        IConsensus.ProposalStatus newStatus
-    ) external onlyConsensus {
+    function updateProposalStatus(bytes32 proposalId, IConsensus.ProposalStatus newStatus) external onlyConsensus {
         Proposal storage proposal = proposals[proposalId];
         if (bytes(proposal.transaction).length == 0) revert ProposalNotFound();
         proposal.status = newStatus;
@@ -118,22 +115,11 @@ contract TransactionManager is ReentrancyGuard {
     )
         external
         view
-        returns (
-            string memory transaction,
-            address proposer,
-            uint256 blockNumber,
-            IConsensus.ProposalStatus status
-        )
+        returns (string memory transaction, address proposer, uint256 blockNumber, IConsensus.ProposalStatus status)
     {
         Proposal storage proposal = proposals[proposalId];
 
-
-        return (
-            proposal.transaction,
-            proposal.proposer,
-            proposal.blockNumber,
-            proposal.status
-        );
+        return (proposal.transaction, proposal.proposer, proposal.blockNumber, proposal.status);
     }
 
     /**
@@ -215,7 +201,7 @@ contract TransactionManager is ReentrancyGuard {
         Proposal storage proposal = proposals[proposalId];
         if (bytes(proposal.transaction).length == 0) revert ProposalNotFound();
 
-        return proposal.status; 
+        return proposal.status;
     }
 
     /**
@@ -227,7 +213,7 @@ contract TransactionManager is ReentrancyGuard {
     }
 
     /**
-     * @dev Get proposal block number  
+     * @dev Get proposal block number
      * @param proposalId Proposal identifier
      * @return blockNumber Block number when proposal was submitted
      */

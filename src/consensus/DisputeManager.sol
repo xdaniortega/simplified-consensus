@@ -18,6 +18,7 @@ contract DisputeManager is ReentrancyGuard {
         Disputed, // Challenge initiated, voting in progress
         Upheld, // Dispute resolved - original decision upheld
         Overturned // Dispute resolved - original decision overturned
+
     }
 
     // ==================== EVENTS ====================
@@ -158,12 +159,11 @@ contract DisputeManager is ReentrancyGuard {
      * @param support Whether the vote supports upholding (true) or overturning (false) the proposal
      * @param signature ECDSA signature proving the vote came from the validator
      */
-    function submitVote(
-        bytes32 proposalId,
-        address voter,
-        bool support,
-        bytes calldata signature
-    ) external onlyConsensusContract onlyValidDispute(proposalId) {
+    function submitVote(bytes32 proposalId, address voter, bool support, bytes calldata signature)
+        external
+        onlyConsensusContract
+        onlyValidDispute(proposalId)
+    {
         DisputeData storage dispute = disputeData[proposalId];
         if (dispute.state != DisputeState.Disputed) revert InvalidState();
         if (block.number > dispute.deadline) revert VotingPeriodExpired();
@@ -188,9 +188,12 @@ contract DisputeManager is ReentrancyGuard {
      * @param proposalId The unique identifier of the disputed proposal
      * @return upheld Whether the original decision was upheld
      */
-    function resolveDispute(
-        bytes32 proposalId
-    ) external onlyConsensusContract onlyValidDispute(proposalId) returns (bool upheld) {
+    function resolveDispute(bytes32 proposalId)
+        external
+        onlyConsensusContract
+        onlyValidDispute(proposalId)
+        returns (bool upheld)
+    {
         return _resolveDispute(proposalId);
     }
 
@@ -213,9 +216,11 @@ contract DisputeManager is ReentrancyGuard {
      * @return yesVotes Number of votes to uphold
      * @return noVotes Number of votes to overturn
      */
-    function getFullDisputeState(
-        bytes32 proposalId
-    ) external view returns (DisputeState state, uint256 deadline, uint256 yesVotes, uint256 noVotes) {
+    function getFullDisputeState(bytes32 proposalId)
+        external
+        view
+        returns (DisputeState state, uint256 deadline, uint256 yesVotes, uint256 noVotes)
+    {
         DisputeData memory dispute = disputeData[proposalId];
         VoteData memory votes = voteData[proposalId];
 
@@ -231,9 +236,7 @@ contract DisputeManager is ReentrancyGuard {
         DisputeData memory dispute = disputeData[proposalId];
         // Safer enum comparison - check if dispute is in disputing state and deadline not passed
         return
-            dispute.initialized &&
-            _isDisputeInState(dispute, DisputeState.Disputed) &&
-            block.number <= dispute.deadline;
+            dispute.initialized && _isDisputeInState(dispute, DisputeState.Disputed) && block.number <= dispute.deadline;
     }
 
     /**
@@ -245,9 +248,7 @@ contract DisputeManager is ReentrancyGuard {
         DisputeData memory dispute = disputeData[proposalId];
         // Safer enum comparison - check if dispute is in disputing state and deadline not passed
         return
-            dispute.initialized &&
-            _isDisputeInState(dispute, DisputeState.Disputed) &&
-            block.number <= dispute.deadline;
+            dispute.initialized && _isDisputeInState(dispute, DisputeState.Disputed) && block.number <= dispute.deadline;
     }
 
     /**
@@ -297,10 +298,11 @@ contract DisputeManager is ReentrancyGuard {
      * @return hasVoted Whether the validator has voted
      * @return support The validator's vote (true = uphold, false = overturn)
      */
-    function getValidatorVote(
-        bytes32 proposalId,
-        address validator
-    ) external view returns (bool hasVoted, bool support) {
+    function getValidatorVote(bytes32 proposalId, address validator)
+        external
+        view
+        returns (bool hasVoted, bool support)
+    {
         try this.getValidatorIndexExternal(proposalId, validator) returns (uint8 index) {
             uint8 votersBitmap = voteData[proposalId].votersBitmap;
             uint8 votesBitmap = voteData[proposalId].votesBitmap;
@@ -451,10 +453,9 @@ contract DisputeManager is ReentrancyGuard {
      * @return The hash that should be signed by the validator
      */
     function _getVoteHash(bytes32 proposalId, bool support) internal pure returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encodePacked(proposalId, support)))
-            );
+        return keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encodePacked(proposalId, support)))
+        );
     }
 
     /**

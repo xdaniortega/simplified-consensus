@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { Test, console } from "forge-std/Test.sol";
-import { PoSConsensus } from "../../src/consensus/PoSConsensus.sol";
-import { DisputeManager } from "../../src/consensus/DisputeManager.sol";
-import { StakingManager } from "../../src/staking/StakingManager.sol";
-import { TransactionManager } from "../../src/TransactionManager.sol";
-import { MockLLMOracle } from "../../src/oracles/MockLLMOracle.sol";
-import { ERC20TokenMock } from "../mock/ERC20TokenMock.sol";
-import { IConsensus } from "../../src/interfaces/IConsensus.sol";
+import {Test, console} from "forge-std/Test.sol";
+import {PoSConsensus} from "../../src/consensus/PoSConsensus.sol";
+import {DisputeManager} from "../../src/consensus/DisputeManager.sol";
+import {StakingManager} from "../../src/staking/StakingManager.sol";
+import {TransactionManager} from "../../src/TransactionManager.sol";
+import {MockLLMOracle} from "../../src/oracles/MockLLMOracle.sol";
+import {ERC20TokenMock} from "../mock/ERC20TokenMock.sol";
+import {IConsensus} from "../../src/interfaces/IConsensus.sol";
 
 /**
  * @title PoSConsensus Test Suite
@@ -106,8 +106,7 @@ contract PoSConsensusTest is Test {
         assertTrue(posConsensus.isProposalInitialized(proposalId));
         assertEq(posConsensus.getSignatureCount(proposalId), 0);
         assertEq(
-            uint8(transactionManager.getProposalStatus(proposalId)),
-            uint8(IConsensus.ProposalStatus.OptimisticApproved)
+            uint8(transactionManager.getProposalStatus(proposalId)), uint8(IConsensus.ProposalStatus.OptimisticApproved)
         );
 
         // Verify validators are available
@@ -279,7 +278,7 @@ contract PoSConsensusTest is Test {
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
         // Sign with enough validators to finalize
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             bytes memory signature = createValidatorSignature(i + 1, proposalId, TEST_TRANSACTION);
             vm.prank(validators[i]);
             posConsensus.signProposal(proposalId, signature);
@@ -566,7 +565,7 @@ contract PoSConsensusTest is Test {
         posConsensus.challengeProposal(proposalId, bob);
 
         // Verify the challenge was initialized correctly
-        (address challenger, ) = disputeManager.getChallengeInfo(proposalId);
+        (address challenger,) = disputeManager.getChallengeInfo(proposalId);
         assertEq(challenger, bob);
     }
 
@@ -575,7 +574,7 @@ contract PoSConsensusTest is Test {
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
         // Sign with enough validators
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             bytes memory signature = createValidatorSignature(i + 1, proposalId, TEST_TRANSACTION);
             vm.prank(validators[i]);
             posConsensus.signProposal(proposalId, signature);
@@ -592,11 +591,11 @@ contract PoSConsensusTest is Test {
 
     // ==================== UTILITY FUNCTIONS ====================
 
-    function createValidatorSignature(
-        uint256 privateKey,
-        bytes32 proposalId,
-        string memory transaction
-    ) internal view returns (bytes memory) {
+    function createValidatorSignature(uint256 privateKey, bytes32 proposalId, string memory transaction)
+        internal
+        view
+        returns (bytes memory)
+    {
         // Use the same hash method as PoSConsensus._getProposalHash()
         bytes32 ethSignedMessageHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", proposalId));
 

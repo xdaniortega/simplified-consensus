@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { Test, console } from "forge-std/Test.sol";
-import { PoSConsensus } from "../../src/consensus/PoSConsensus.sol";
-import { DisputeManager } from "../../src/consensus/DisputeManager.sol";
-import { StakingManager } from "../../src/staking/StakingManager.sol";
-import { TransactionManager } from "../../src/TransactionManager.sol";
-import { MockLLMOracle } from "../../src/oracles/MockLLMOracle.sol";
-import { ERC20TokenMock } from "../mock/ERC20TokenMock.sol";
-import { IConsensus } from "../../src/interfaces/IConsensus.sol";
+import {Test, console} from "forge-std/Test.sol";
+import {PoSConsensus} from "../../src/consensus/PoSConsensus.sol";
+import {DisputeManager} from "../../src/consensus/DisputeManager.sol";
+import {StakingManager} from "../../src/staking/StakingManager.sol";
+import {TransactionManager} from "../../src/TransactionManager.sol";
+import {MockLLMOracle} from "../../src/oracles/MockLLMOracle.sol";
+import {ERC20TokenMock} from "../mock/ERC20TokenMock.sol";
+import {IConsensus} from "../../src/interfaces/IConsensus.sol";
 
 /**
  * @title DisputeManager Test Suite
@@ -96,7 +96,7 @@ contract DisputeManagerTest is Test {
 
         assertTrue(disputeManager.isInVotingPeriod(proposalId));
 
-        (address challenger, ) = disputeManager.getChallengeInfo(proposalId);
+        (address challenger,) = disputeManager.getChallengeInfo(proposalId);
         assertEq(challenger, bob);
     }
 
@@ -449,8 +449,8 @@ contract DisputeManagerTest is Test {
     function test_GetFullDisputeState() public {
         bytes32 proposalId = setupVotedProposal(2, 1); // 2 yes, 1 no
 
-        (DisputeManager.DisputeState state, uint256 deadline, uint256 yesVotes, uint256 noVotes) = disputeManager
-            .getFullDisputeState(proposalId);
+        (DisputeManager.DisputeState state, uint256 deadline, uint256 yesVotes, uint256 noVotes) =
+            disputeManager.getFullDisputeState(proposalId);
 
         assertEq(uint8(state), uint8(DisputeManager.DisputeState.Upheld));
         assertTrue(deadline > 0);
@@ -503,7 +503,7 @@ contract DisputeManagerTest is Test {
         bool foundBob = false;
         bool foundCharlie = false;
 
-        for (uint i = 0; i < voters.length; i++) {
+        for (uint256 i = 0; i < voters.length; i++) {
             if (voters[i] == alice) foundAlice = true;
             if (voters[i] == bob) foundBob = true;
             if (voters[i] == charlie) foundCharlie = true;
@@ -573,11 +573,10 @@ contract DisputeManagerTest is Test {
         bytes32 proposalId = setupChallengedProposal();
 
         // Submit votes for first 3 validators
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             bytes32 voteHash = keccak256(
                 abi.encodePacked(
-                    "\x19Ethereum Signed Message:\n32",
-                    keccak256(abi.encodePacked(proposalId, i % 2 == 0))
+                    "\x19Ethereum Signed Message:\n32", keccak256(abi.encodePacked(proposalId, i % 2 == 0))
                 )
             );
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(i + 1, voteHash);
@@ -605,7 +604,7 @@ contract DisputeManagerTest is Test {
         bytes32 proposalId = setupChallengedProposal();
 
         // With 5 validators, majority is 3. Submit 3 "no" votes to auto-resolve as overturned
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             bytes32 voteHash = keccak256(
                 abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encodePacked(proposalId, false)))
             );

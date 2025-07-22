@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { ILLMOracle } from "../interfaces/ILLMOracle.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import {ILLMOracle} from "../interfaces/ILLMOracle.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title MockLLMOracle

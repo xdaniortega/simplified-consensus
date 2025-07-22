@@ -115,9 +115,7 @@ contract TransactionManager is ITransactionManager, ReentrancyGuard {
      * @return blockNumber Block number when submitted
      * @return status Current proposal status
      */
-    function getProposal(
-        bytes32 proposalId
-    )
+    function getProposal(bytes32 proposalId)
         external
         view
         returns (string memory transaction, address proposer, uint256 blockNumber, IConsensus.ProposalStatus status)

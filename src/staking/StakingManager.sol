@@ -21,6 +21,7 @@ import "./ValidatorLogic.sol";
 contract StakingManager is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
+
     event ValidatorCreated(address indexed validator, address indexed proxy, uint256 stake);
     event ValidatorRemoved(address indexed validator);
     event ConsensusModuleUpdated(address indexed oldModule, address indexed newModule);
@@ -102,19 +103,13 @@ contract StakingManager is ReentrancyGuard {
         stakingToken.safeTransferFrom(msg.sender, proxy, amount);
 
         // Deploy proxy with CREATE2
-        bytes memory data = abi.encodeWithSelector(
-            ValidatorLogic.initialize.selector,
-            msg.sender,
-            address(stakingToken),
-            amount
-        );
+        bytes memory data =
+            abi.encodeWithSelector(ValidatorLogic.initialize.selector, msg.sender, address(stakingToken), amount);
         bytes32 salt = keccak256(abi.encodePacked(msg.sender));
         bytes memory bytecode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), data));
         assembly {
             let deployed := create2(0, add(bytecode, 0x20), mload(bytecode), salt)
-            if iszero(deployed) {
-                revert(0, 0)
-            }
+            if iszero(deployed) { revert(0, 0) }
         }
         validatorToProxy[msg.sender] = proxy;
         isValidator[msg.sender] = true;
@@ -165,9 +160,11 @@ contract StakingManager is ReentrancyGuard {
      * @return topValidators Array of validator addresses sorted by stake (descending)
      * @return topStakes Array of corresponding stake amounts
      */
-    function getTopNValidators(
-        uint256 count
-    ) external view returns (address[] memory topValidators, uint256[] memory topStakes) {
+    function getTopNValidators(uint256 count)
+        external
+        view
+        returns (address[] memory topValidators, uint256[] memory topStakes)
+    {
         uint256 totalValidators = _validators.length();
         if (totalValidators == 0) {
             return (new address[](0), new uint256[](0));
@@ -265,12 +262,8 @@ contract StakingManager is ReentrancyGuard {
      * @return predicted Predicted proxy address
      */
     function computeProxyAddress(address validator, uint256 amount) public view returns (address predicted) {
-        bytes memory data = abi.encodeWithSelector(
-            ValidatorLogic.initialize.selector,
-            validator,
-            address(stakingToken),
-            amount
-        );
+        bytes memory data =
+            abi.encodeWithSelector(ValidatorLogic.initialize.selector, validator, address(stakingToken), amount);
         bytes32 salt = keccak256(abi.encodePacked(validator));
         bytes memory bytecode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), data));
         bytes32 hash = keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, keccak256(bytecode)));

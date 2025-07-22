@@ -16,6 +16,7 @@ interface IConsensus {
         Rejected, // Consensus reached - rejected
         Challenged, // Under dispute/challenge
         Finalized // Final state, no more changes
+
     }
 
     // ==================== CORE FUNCTIONS ====================

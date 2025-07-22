@@ -99,11 +99,8 @@ contract ValidatorLogic {
         if (amount == 0) revert InvalidAmount();
 
         // Create new position
-        uint256 positionId = _createStakingPosition(
-            StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value,
-            amount,
-            "Legacy stake"
-        );
+        uint256 positionId =
+            _createStakingPosition(StorageSlot.getAddressSlot(VALIDATOR_OWNER_SLOT).value, amount, "Legacy stake");
 
         uint256 currentStake = StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
         uint256 newStake = currentStake + amount;
@@ -141,27 +138,33 @@ contract ValidatorLogic {
     function _validatorPositionsLengthSlot(address validator) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(validator, ".validator.positions.length"));
     }
+
     function _validatorPositionSlot(address validator, uint256 index) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(validator, ".validator.positions.", index));
     }
+
     function getValidatorPositionsLength(address validator) public view returns (uint256) {
         return StorageSlot.getUint256Slot(_validatorPositionsLengthSlot(validator)).value;
     }
+
     function getValidatorPosition(address validator, uint256 index) public view returns (uint256 positionId) {
         if (index < getValidatorPositionsLength(validator)) {
             return StorageSlot.getUint256Slot(_validatorPositionSlot(validator, index)).value;
         }
         return 0;
     }
+
     function pushValidatorPosition(address validator, uint256 positionId) internal {
         uint256 len = getValidatorPositionsLength(validator);
         StorageSlot.getUint256Slot(_validatorPositionSlot(validator, len)).value = positionId;
         StorageSlot.getUint256Slot(_validatorPositionsLengthSlot(validator)).value = len + 1;
     }
+
     function setValidatorPosition(address validator, uint256 index, uint256 positionId) internal {
         require(index < getValidatorPositionsLength(validator), "Index out of bounds");
         StorageSlot.getUint256Slot(_validatorPositionSlot(validator, index)).value = positionId;
     }
+
     function deleteValidatorPosition(address validator, uint256 index) internal {
         uint256 len = getValidatorPositionsLength(validator);
         if (index < len) {
@@ -264,11 +267,10 @@ contract ValidatorLogic {
      * @param description Position description
      * @return positionId ID of the created position
      */
-    function _createStakingPosition(
-        address owner,
-        uint256 amount,
-        string memory description
-    ) internal returns (uint256 positionId) {
+    function _createStakingPosition(address owner, uint256 amount, string memory description)
+        internal
+        returns (uint256 positionId)
+    {
         uint256 total = getTotalPositions();
         positionId = total + 1;
         setTotalPositions(positionId);
@@ -303,7 +305,7 @@ contract ValidatorLogic {
         console.log("totalPositions", totalPositions);
 
         // LIFO: start from the last position
-        for (uint256 i = totalPositions; i > 0 && remaining > 0; ) {
+        for (uint256 i = totalPositions; i > 0 && remaining > 0;) {
             uint256 posId = getValidatorPosition(validator, i - 1);
             console.log("index", i - 1);
             console.log("posId", posId);

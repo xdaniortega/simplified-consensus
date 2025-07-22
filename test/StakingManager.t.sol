@@ -180,9 +180,8 @@ contract StakingManagerTest is Test {
         address proxy = factory.validatorToProxy(alice);
         ValidatorLogic logic = ValidatorLogic(proxy);
         factory.unstake(unstakeAmount);
-        uint256 expected = (unstakeAmount >= stakeAmount || stakeAmount - unstakeAmount < MIN_STAKE)
-            ? 0
-            : stakeAmount - unstakeAmount;
+        uint256 expected =
+            (unstakeAmount >= stakeAmount || stakeAmount - unstakeAmount < MIN_STAKE) ? 0 : stakeAmount - unstakeAmount;
         assertEq(logic.getStakeAmount(), expected);
         vm.stopPrank();
     }
@@ -260,7 +259,7 @@ contract StakingManagerTest is Test {
     }
 
     function testStake_RevertMaxValidatorsReached() public {
-        for (uint i = 0; i < MAX_VALIDATORS; i++) {
+        for (uint256 i = 0; i < MAX_VALIDATORS; i++) {
             address user = vm.addr(i + 10);
             token.mint(user, 2000);
             vm.startPrank(user);
@@ -285,7 +284,7 @@ contract StakingManagerTest is Test {
     function testRemoveValidatorFromArray_RemovesMiddle() public {
         // Agrega 3 validadores
         address[] memory users = new address[](3);
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             users[i] = vm.addr(i + 10);
             token.mint(users[i], 2000);
             vm.startPrank(users[i]);
@@ -306,11 +305,11 @@ contract StakingManagerTest is Test {
     function testGetTopNValidators() public {
         // Agrega 3 validadores con diferentes stakes
         address[] memory users = new address[](3);
-        uint[] memory amounts = new uint[](3);
+        uint256[] memory amounts = new uint256[](3);
         amounts[0] = 3000;
         amounts[1] = 2000;
         amounts[2] = 4000;
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             users[i] = vm.addr(i + 10);
             token.mint(users[i], 5000);
             vm.startPrank(users[i]);
@@ -318,7 +317,7 @@ contract StakingManagerTest is Test {
             factory.stake(amounts[i]);
             vm.stopPrank();
         }
-        (address[] memory top, uint[] memory stakes) = factory.getTopNValidators(2);
+        (address[] memory top, uint256[] memory stakes) = factory.getTopNValidators(2);
         assertEq(top.length, 2);
         assertEq(stakes.length, 2);
         assertEq(stakes[0], 4000);
@@ -332,20 +331,15 @@ contract StakingManagerTest is Test {
         factory.stake(2000);
         address proxy = factory.validatorToProxy(alice);
         bytes memory data = abi.encodeWithSelector(ValidatorLogic.initialize.selector, alice, address(token), 2000);
-        (bool success, ) = proxy.call(data);
+        (bool success,) = proxy.call(data);
         assertFalse(success);
         vm.stopPrank();
     }
 
     function testValidatorLogic_Initialize_RevertInvalidOwner() public {
         address proxy = address(new ValidatorLogic());
-        bytes memory data = abi.encodeWithSelector(
-            ValidatorLogic.initialize.selector,
-            address(0),
-            address(token),
-            2000
-        );
-        (bool success, ) = proxy.call(data);
+        bytes memory data = abi.encodeWithSelector(ValidatorLogic.initialize.selector, address(0), address(token), 2000);
+        (bool success,) = proxy.call(data);
         assertFalse(success);
     }
 
@@ -354,7 +348,7 @@ contract StakingManagerTest is Test {
         token.approve(address(factory), 2000);
         factory.stake(2000);
         address proxy = factory.validatorToProxy(alice);
-        (bool success, ) = proxy.call(abi.encodeWithSignature("stake(uint256)", 0));
+        (bool success,) = proxy.call(abi.encodeWithSignature("stake(uint256)", 0));
         assertFalse(success);
         vm.stopPrank();
     }
@@ -367,7 +361,7 @@ contract StakingManagerTest is Test {
         // Llama a una función onlyFactory desde otra cuenta
         vm.stopPrank();
         vm.startPrank(bob);
-        (bool success, ) = proxy.call(abi.encodeWithSignature("unstake(uint256)", 1000));
+        (bool success,) = proxy.call(abi.encodeWithSignature("unstake(uint256)", 1000));
         assertFalse(success);
         vm.stopPrank();
     }
@@ -379,7 +373,7 @@ contract StakingManagerTest is Test {
         address proxy = factory.validatorToProxy(alice);
         ValidatorLogic logic = ValidatorLogic(proxy);
         // Intenta stake extra (debe fallar porque solo el factory puede)
-        (bool success, ) = proxy.call(abi.encodeWithSignature("stake(uint256)", 1000));
+        (bool success,) = proxy.call(abi.encodeWithSignature("stake(uint256)", 1000));
         assertFalse(success); // Debe fallar por onlyFactory
         vm.stopPrank();
     }

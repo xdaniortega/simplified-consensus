@@ -134,11 +134,10 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
     /**
      * @dev Initialize consensus for a new proposal
      */
-    function initializeConsensus(
-        bytes32 proposalId,
-        string calldata transaction,
-        address proposer
-    ) external nonReentrant {
+    function initializeConsensus(bytes32 proposalId, string calldata transaction, address proposer)
+        external
+        nonReentrant
+    {
         if (posData[proposalId].initialized) revert ProposalAlreadyExists();
 
         // Get top validators for this proposal
@@ -146,12 +145,8 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         if (topValidators.length < CONSENSUS_THRESHOLD) revert NotEnoughValidators();
 
         // Initialize PoS data, assign validators to the proposal
-        posData[proposalId] = PoSData({
-            signatureCount: 0,
-            initialized: true,
-            transactionManager: msg.sender,
-            validators: topValidators
-        });
+        posData[proposalId] =
+            PoSData({signatureCount: 0, initialized: true, transactionManager: msg.sender, validators: topValidators});
 
         emit ProposalInitialized(proposalId, proposer);
         emit ValidatorsAssigned(proposalId, topValidators);
@@ -182,8 +177,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         disputeManager.initializeDispute(proposalId, posData[proposalId].validators, CHALLENGE_PERIOD, msg.sender);
 
         ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(
-            proposalId,
-            IConsensus.ProposalStatus.Challenged
+            proposalId, IConsensus.ProposalStatus.Challenged
         );
 
         emit ChallengeInitiated(proposalId, msg.sender);
@@ -330,7 +324,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
      */
     function _isSelectedValidator(bytes32 proposalId, address validator) internal view returns (bool) {
         address[] memory validators = posData[proposalId].validators;
-        for (uint256 i = 0; i < validators.length; ) {
+        for (uint256 i = 0; i < validators.length;) {
             if (validators[i] == validator) {
                 return true;
             }
@@ -446,9 +440,8 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
 
         // Check if dispute is resolved
         try disputeManager.getDisputeState(proposalId) returns (DisputeManager.DisputeState disputeState) {
-            return
-                disputeState == DisputeManager.DisputeState.Upheld ||
-                disputeState == DisputeManager.DisputeState.Overturned;
+            return disputeState == DisputeManager.DisputeState.Upheld
+                || disputeState == DisputeManager.DisputeState.Overturned;
         } catch {
             return false;
         }
@@ -478,8 +471,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         disputeManager.initializeDispute(proposalId, posData[proposalId].validators, CHALLENGE_PERIOD, challenger);
 
         ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(
-            proposalId,
-            IConsensus.ProposalStatus.Challenged
+            proposalId, IConsensus.ProposalStatus.Challenged
         );
     }
 
@@ -491,8 +483,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         // Only finalize if we have enough signatures AND no active dispute
         if (posData[proposalId].signatureCount >= CONSENSUS_THRESHOLD && !_isDisputeActive(proposalId)) {
             ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(
-                proposalId,
-                IConsensus.ProposalStatus.Finalized
+                proposalId, IConsensus.ProposalStatus.Finalized
             );
             emit ProposalStateUpdatedByConsensus(proposalId, IConsensus.ProposalStatus.Finalized);
         }
@@ -505,9 +496,9 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         address transactionManager = posData[proposalId].transactionManager;
         uint256 blockNumber = ITransactionManager(transactionManager).getProposalBlockNumber(proposalId);
         if (
-            block.number > blockNumber + CHALLENGE_PERIOD ||
-            ITransactionManager(transactionManager).getProposalStatus(proposalId) ==
-            IConsensus.ProposalStatus.Challenged
+            block.number > blockNumber + CHALLENGE_PERIOD
+                || ITransactionManager(transactionManager).getProposalStatus(proposalId)
+                    == IConsensus.ProposalStatus.Challenged
         ) {
             return false;
         }
@@ -535,11 +526,11 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
      * @param upheld Whether the original decision was upheld (true) or overturned (false)
      * @param challenger The address that initiated the challenge
      */
-    function onDisputeResolved(
-        bytes32 proposalId,
-        bool upheld,
-        address challenger
-    ) external onlyAssociatedDisputeManager nonReentrant {
+    function onDisputeResolved(bytes32 proposalId, bool upheld, address challenger)
+        external
+        onlyAssociatedDisputeManager
+        nonReentrant
+    {
         if (!posData[proposalId].initialized) revert ProposalNotFound();
 
         uint256 slashAmount = 0;
@@ -562,10 +553,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
             if (slashAmount > 0) {
                 stakingManager.distributeRewards(slashAmount, challenger);
             }
-            ITransactionManager(transactionManager).updateProposalStatus(
-                proposalId,
-                IConsensus.ProposalStatus.Rejected
-            );
+            ITransactionManager(transactionManager).updateProposalStatus(proposalId, IConsensus.ProposalStatus.Rejected);
         } else {
             // Challenge failed - original decision upheld
             // Slash the challenger for false challenge
@@ -592,8 +580,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
                 }
             }
             ITransactionManager(transactionManager).updateProposalStatus(
-                proposalId,
-                IConsensus.ProposalStatus.Finalized
+                proposalId, IConsensus.ProposalStatus.Finalized
             );
         }
 

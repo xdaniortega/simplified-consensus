@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { Test, console } from "forge-std/Test.sol";
-import { TransactionManager } from "../src/TransactionManager.sol";
-import { IConsensus } from "../src/interfaces/IConsensus.sol";
-import { PoSConsensus } from "../src/consensus/PoSConsensus.sol";
-import { DisputeManager } from "../src/consensus/DisputeManager.sol";
-import { StakingManager } from "../src/staking/StakingManager.sol";
-import { MockLLMOracle } from "../src/oracles/MockLLMOracle.sol";
-import { ERC20TokenMock } from "./mock/ERC20TokenMock.sol";
+import {Test, console} from "forge-std/Test.sol";
+import {TransactionManager} from "../src/TransactionManager.sol";
+import {IConsensus} from "../src/interfaces/IConsensus.sol";
+import {PoSConsensus} from "../src/consensus/PoSConsensus.sol";
+import {DisputeManager} from "../src/consensus/DisputeManager.sol";
+import {StakingManager} from "../src/staking/StakingManager.sol";
+import {MockLLMOracle} from "../src/oracles/MockLLMOracle.sol";
+import {ERC20TokenMock} from "./mock/ERC20TokenMock.sol";
 
 /**
  * @title TransactionManager Test Suite
@@ -94,12 +94,8 @@ contract TransactionManagerTest is Test {
     function test_SubmitProposal() public {
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
-        (
-            string memory transaction,
-            address proposer,
-            uint256 blockNumber,
-            IConsensus.ProposalStatus status
-        ) = transactionManager.getProposal(proposalId);
+        (string memory transaction, address proposer, uint256 blockNumber, IConsensus.ProposalStatus status) =
+            transactionManager.getProposal(proposalId);
 
         assertEq(transaction, TEST_TRANSACTION);
         assertEq(proposer, address(this));
@@ -163,8 +159,8 @@ contract TransactionManagerTest is Test {
 
         string memory transaction1;
         string memory transaction2;
-        (transaction1, , , ) = transactionManager.getProposal(proposalId1);
-        (transaction2, , , ) = transactionManager.getProposal(proposalId2);
+        (transaction1,,,) = transactionManager.getProposal(proposalId1);
+        (transaction2,,,) = transactionManager.getProposal(proposalId2);
 
         assertEq(transaction1, tx1);
         assertEq(transaction2, tx2);
@@ -188,11 +184,11 @@ contract TransactionManagerTest is Test {
         posConsensus.challengeProposal(proposalId);
 
         IConsensus.ProposalStatus status;
-        (, , , status) = transactionManager.getProposal(proposalId);
+        (,,, status) = transactionManager.getProposal(proposalId);
         assertEq(uint8(status), uint8(IConsensus.ProposalStatus.Challenged));
 
         assertTrue(disputeManager.isInVotingPeriod(proposalId));
-        (address challenger, ) = disputeManager.getChallengeInfo(proposalId);
+        (address challenger,) = disputeManager.getChallengeInfo(proposalId);
         assertEq(challenger, alice);
     }
 
@@ -207,7 +203,7 @@ contract TransactionManagerTest is Test {
         posConsensus.signProposal(proposalId, signature);
 
         IConsensus.ProposalStatus status;
-        (, , , status) = transactionManager.getProposal(proposalId);
+        (,,, status) = transactionManager.getProposal(proposalId);
         uint256 signatureCount = posConsensus.getSignatureCount(proposalId);
 
         assertEq(signatureCount, 1);
@@ -228,7 +224,7 @@ contract TransactionManagerTest is Test {
         }
 
         IConsensus.ProposalStatus status;
-        (, , , status) = transactionManager.getProposal(proposalId);
+        (,,, status) = transactionManager.getProposal(proposalId);
         uint256 signatureCount = posConsensus.getSignatureCount(proposalId);
 
         assertEq(signatureCount, 3);
@@ -246,18 +242,18 @@ contract TransactionManagerTest is Test {
         }
 
         IConsensus.ProposalStatus status;
-        (, , , status) = transactionManager.getProposal(proposalId);
+        (,,, status) = transactionManager.getProposal(proposalId);
         assertEq(uint8(status), uint8(IConsensus.ProposalStatus.Finalized));
         assertTrue(transactionManager.isProposalApproved(proposalId));
     }
 
     // ==================== UTILITY FUNCTIONS ====================
 
-    function createValidatorSignature(
-        uint256 privateKey,
-        bytes32 proposalId,
-        string memory transaction
-    ) internal view returns (bytes memory) {
+    function createValidatorSignature(uint256 privateKey, bytes32 proposalId, string memory transaction)
+        internal
+        view
+        returns (bytes memory)
+    {
         // Use the same hash method as PoSConsensus._getProposalHash()
         bytes32 ethSignedMessageHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", proposalId));
 
@@ -335,7 +331,7 @@ contract TransactionManagerTest is Test {
         bytes32 proposalId = transactionManager.submitProposal(TEST_TRANSACTION);
 
         // Check via proposals mapping
-        (, address proposer, , ) = transactionManager.proposals(proposalId);
+        (, address proposer,,) = transactionManager.proposals(proposalId);
         assertEq(proposer, alice);
     }
 
@@ -363,7 +359,7 @@ contract TransactionManagerTest is Test {
 
         bytes32 proposalId = transactionManager.submitProposal(transaction);
 
-        (string memory storedTransaction, , , ) = transactionManager.getProposal(proposalId);
+        (string memory storedTransaction,,,) = transactionManager.getProposal(proposalId);
         assertEq(storedTransaction, transaction);
     }
 }

@@ -42,15 +42,20 @@ contract StakingManager is ReentrancyGuard {
     error NotAValidator();
     error ValidatorProxyNotFound();
     error SlashAmountExceedsStake();
+    error ZeroAddress();
+    error SlashingAmountMismatch();
+    error RewardDistributionAmountMismatch();
+    error ValidatorAlreadyInSet();
+    error ValidatorNotInSet();
 
-    UpgradeableBeacon public beacon;
-    IERC20 public stakingToken;
+    UpgradeableBeacon public immutable beacon;
+    IERC20 public immutable stakingToken;
     uint256 public constant WITHDRAW_COOLDOWN_PERIOD = 1 days;
     uint256 public constant TOKEN_DECIMALS = 18;
     uint256 public constant BONDING_PERIOD = 1; // 1 block bonding period
-    uint256 public minimumStake;
-    uint16 public maxValidators;
-    uint16 public validatorThreshold;
+    uint256 public immutable minimumStake;
+    uint16 public immutable maxValidators;
+    uint16 public immutable validatorThreshold;
 
     mapping(address => address) public validatorToProxy; // user to proxy
     mapping(address => bool) public isValidator;
@@ -64,6 +69,11 @@ contract StakingManager is ReentrancyGuard {
     }
 
     constructor(address _stakingToken, uint256 _minimumStake, uint16 _maxValidators, uint16 _validatorThreshold) {
+        if (_stakingToken == address(0)) revert ZeroAddress();
+        if (_minimumStake == 0) revert InsufficientStakeAmount();
+        if (_maxValidators == 0) revert MaxValidatorsReached();
+        if (_validatorThreshold == 0) revert InsufficientStakeAmount();
+
         stakingToken = IERC20(_stakingToken);
         minimumStake = _minimumStake;
         maxValidators = _maxValidators;
@@ -108,7 +118,11 @@ contract StakingManager is ReentrancyGuard {
         }
         validatorToProxy[msg.sender] = proxy;
         isValidator[msg.sender] = true;
-        _validators.add(msg.sender);
+
+        // Handle return value from EnumerableSet.add()
+        bool added = _validators.add(msg.sender);
+        if (!added) revert ValidatorAlreadyInSet();
+
         emit ValidatorCreated(msg.sender, proxy, amount);
     }
 
@@ -127,15 +141,19 @@ contract StakingManager is ReentrancyGuard {
             amount = currentStake;
         }
 
+        // CHECKS-EFFECTS-INTERACTIONS: Update state BEFORE external call
+        bool willRemoveValidator = (currentStake - amount) == 0;
+        if (willRemoveValidator) {
+            _removeValidatorFromArray(msg.sender);
+            isValidator[msg.sender] = false;
+        }
+
         uint256 unstaked = ValidatorLogic(proxy).unstake(amount);
         if (unstaked > 0) {
             emit Unstaked(msg.sender, unstaked);
         }
 
-        uint256 remainingStake = ValidatorLogic(proxy).getStakeAmount();
-        if (remainingStake == 0) {
-            _removeValidatorFromArray(msg.sender);
-            isValidator[msg.sender] = false;
+        if (willRemoveValidator) {
             emit ValidatorRemoved(msg.sender);
         }
     }
@@ -277,16 +295,21 @@ contract StakingManager is ReentrancyGuard {
         uint256 currentStake = validatorLogic.getStakeAmount();
         if (currentStake < slashAmount) revert SlashAmountExceedsStake();
 
-        // Perform the slashing by calling unstake on the ValidatorLogic
-        validatorLogic.unstake(slashAmount);
-
-        emit ValidatorSlashed(validator, slashAmount, reason);
-
-        // If validator's stake falls below minimum, remove them
-        uint256 remainingStake = validatorLogic.getStakeAmount();
-        if (remainingStake < minimumStake) {
+        // CHECKS-EFFECTS-INTERACTIONS: Update state BEFORE external call
+        bool willRemoveValidator = (currentStake - slashAmount) < minimumStake;
+        if (willRemoveValidator) {
+            // Remove validator before external call to prevent reentrancy
             _removeValidatorFromArray(validator);
             isValidator[validator] = false;
+        }
+
+        // Perform the slashing by calling unstake on the ValidatorLogic
+        uint256 actualSlashed = validatorLogic.unstake(slashAmount);
+        if (actualSlashed != slashAmount) revert SlashingAmountMismatch();
+
+        emit ValidatorSlashed(validator, actualSlashed, reason);
+
+        if (willRemoveValidator) {
             emit ValidatorRemoved(validator);
         }
     }
@@ -295,46 +318,19 @@ contract StakingManager is ReentrancyGuard {
         if (!isValidator[validator]) revert NotAValidator();
         address proxy = validatorToProxy[validator];
         if (proxy == address(0)) revert ValidatorProxyNotFound();
-        ValidatorLogic(proxy).stake(amount);
+
+        uint256 actualStaked = ValidatorLogic(proxy).stake(amount);
+        if (actualStaked != amount) revert RewardDistributionAmountMismatch();
     }
 
     // ---------------------------------- INTERNAL FUNCTIONS ----------------------------------
-    /**
-     * @notice Registers a new validator by deploying a BeaconProxy using CREATE2.
-     * @dev Computes the proxy address, pre-funds it, and deploys the proxy with CREATE2. Only one proxy per validator is allowed.
-     * @param _amount The amount to stake for the validator.
-     * @return proxy The address of the deployed BeaconProxy.
-     */
-    function _registerValidator(uint256 _amount) internal returns (address proxy) {
-        bytes memory data = abi.encodeWithSelector(
-            ValidatorLogic.initialize.selector,
-            msg.sender,
-            address(stakingToken),
-            _amount
-        );
-        bytes32 salt = keccak256(abi.encodePacked(msg.sender)); // unique proxy per validator
-        bytes memory bytecode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), data));
-
-        address predicted = computeProxyAddress(msg.sender, _amount);
-        stakingToken.safeTransferFrom(msg.sender, predicted, _amount);
-
-        assembly {
-            proxy := create2(0, add(bytecode, 0x20), mload(bytecode), salt)
-            if iszero(proxy) {
-                revert(0, 0)
-            }
-        }
-
-        validatorToProxy[msg.sender] = proxy;
-        isValidator[msg.sender] = true;
-        _validators.add(msg.sender);
-    }
-
     /**
      * @dev Internal function to remove validator from set - O(1) operation
      * @param validator Validator to remove
      */
     function _removeValidatorFromArray(address validator) internal {
-        _validators.remove(validator);
+        // Handle return value from EnumerableSet.remove()
+        bool removed = _validators.remove(validator);
+        if (!removed) revert ValidatorNotInSet();
     }
 }

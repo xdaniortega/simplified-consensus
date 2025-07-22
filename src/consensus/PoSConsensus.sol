@@ -52,6 +52,8 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
     error NotEnoughSignatures();
     error DisputeActive();
     error OnlyAssociatedDispute();
+    error DisputeResolutionFailed();
+    error MismatchedValidatorData();
 
     // ==================== STRUCTS ====================
     struct PoSData {
@@ -221,7 +223,8 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         if (!disputeManager.isInVotingPeriod(proposalId)) revert InvalidProposalState();
 
         // Delegate to dispute manager - it will call back onDisputeResolved
-        disputeManager.resolveDispute(proposalId);
+        bool resolved = disputeManager.resolveDispute(proposalId);
+        if (!resolved) revert DisputeResolutionFailed();
     }
 
     // ==================== SIGNATURE COLLECTION ====================
@@ -314,7 +317,10 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         }
 
         uint256 count = validatorCount < VALIDATOR_SET_SIZE ? validatorCount : VALIDATOR_SET_SIZE;
-        (address[] memory topValidators, ) = stakingManager.getTopNValidators(count);
+        (address[] memory topValidators, uint256[] memory topStakes) = stakingManager.getTopNValidators(count);
+        // We only need the validators array for consensus, stakes are not used here
+        // but we handle the return value properly to satisfy static analysis
+        if (topStakes.length != topValidators.length) revert MismatchedValidatorData();
         return topValidators;
     }
 
@@ -465,15 +471,16 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
         if (!_canBeChallenge(proposalId)) revert InvalidProposalState();
         if (_isDisputeActive(proposalId)) revert DisputeActive();
 
-        // Initialize dispute mechanism (only when actually challenged)
+        // Emit event BEFORE external calls to prevent reentrancy issues
+        emit ChallengeInitiated(proposalId, challenger);
+
+        // External calls come after event emission
         disputeManager.initializeDispute(proposalId, posData[proposalId].validators, CHALLENGE_PERIOD, challenger);
 
         ITransactionManager(posData[proposalId].transactionManager).updateProposalStatus(
             proposalId,
             IConsensus.ProposalStatus.Challenged
         );
-
-        emit ChallengeInitiated(proposalId, challenger);
     }
 
     // ==================== INTERNAL FUNCTIONS ====================
@@ -523,7 +530,7 @@ contract PoSConsensus is IConsensus, ReentrancyGuard {
     // ==================== DISPUTE RESOLUTION CALLBACK ====================
 
     /**
-     * @dev Called by DisputeManager when a dispute is resolved
+     * @dev Called by dispute manager when dispute is resolved
      * @param proposalId The proposal ID
      * @param upheld Whether the original decision was upheld (true) or overturned (false)
      * @param challenger The address that initiated the challenge

@@ -357,11 +357,4 @@ contract ValidatorLogic {
     function _deleteStakingPosition(uint256 posId) internal {
         setStakingPosition(posId, StakingPosition(0, 0, 0, 0, 0, ""));
     }
-
-    /**
-     * @dev Delete a validator position from the validator's array (sets to zero)
-     */
-    function _deleteValidatorPosition(address validator, uint256 index) internal {
-        deleteValidatorPosition(validator, index);
-    }
 }

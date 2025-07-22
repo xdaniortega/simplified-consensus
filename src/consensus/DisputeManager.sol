@@ -62,6 +62,7 @@ contract DisputeManager is ReentrancyGuard {
     error InvalidSignatureV();
     error OnlyConsensusContract();
     error AlreadyResolved();
+    error ZeroAddress();
 
     // ==================== STRUCTS ====================
 
@@ -115,6 +116,10 @@ contract DisputeManager is ReentrancyGuard {
 
     // ==================== CONSTRUCTOR ====================
     constructor(address _stakingManager, address _consensusContract, uint256 _votingPeriod) {
+        if (_stakingManager == address(0)) revert ZeroAddress();
+        if (_consensusContract == address(0)) revert ZeroAddress();
+        if (_votingPeriod == 0) revert InvalidState();
+
         stakingManager = StakingManager(_stakingManager);
         consensusContract = _consensusContract;
         VOTING_PERIOD = _votingPeriod;
@@ -218,13 +223,17 @@ contract DisputeManager is ReentrancyGuard {
     }
 
     /**
-     * @dev Check if a proposal can be challenged
+     * @dev Check if proposal can be challenged
      * @param proposalId The unique identifier of the proposal
      * @return bool Whether the proposal can be challenged
      */
     function canChallengeProposal(bytes32 proposalId) external view returns (bool) {
         DisputeData memory dispute = disputeData[proposalId];
-        return dispute.initialized && dispute.state == DisputeState.Disputed && block.number <= dispute.deadline;
+        // Safer enum comparison - check if dispute is in disputing state and deadline not passed
+        return
+            dispute.initialized &&
+            _isDisputeInState(dispute, DisputeState.Disputed) &&
+            block.number <= dispute.deadline;
     }
 
     /**
@@ -234,7 +243,11 @@ contract DisputeManager is ReentrancyGuard {
      */
     function isInVotingPeriod(bytes32 proposalId) external view returns (bool) {
         DisputeData memory dispute = disputeData[proposalId];
-        return dispute.initialized && dispute.state == DisputeState.Disputed && block.number <= dispute.deadline;
+        // Safer enum comparison - check if dispute is in disputing state and deadline not passed
+        return
+            dispute.initialized &&
+            _isDisputeInState(dispute, DisputeState.Disputed) &&
+            block.number <= dispute.deadline;
     }
 
     /**
@@ -356,10 +369,12 @@ contract DisputeManager is ReentrancyGuard {
 
         VoteData memory votes = voteData[proposalId];
 
-        // Notify consensus contract about resolution
+        //Emit event BEFORE external call to prevent reentrancy issues
+        emit DisputeVotingCompleted(proposalId, upheld, votes.yesVotes, votes.noVotes);
+
+        // External call comes after state changes and event emission
         IConsensus(consensusContract).onDisputeResolved(proposalId, upheld, dispute.challenger);
 
-        emit DisputeVotingCompleted(proposalId, upheld, votes.yesVotes, votes.noVotes);
         return upheld;
     }
 
@@ -468,5 +483,16 @@ contract DisputeManager is ReentrancyGuard {
         if (v != 27 && v != 28) revert InvalidSignature();
 
         return ecrecover(messageHash, v, r, s);
+    }
+
+    /**
+     * @dev Helper to check if a dispute is in a specific state
+     * @param dispute The dispute data
+     * @param state The state to check for
+     * @return bool Whether the dispute is in the specified state
+     */
+    function _isDisputeInState(DisputeData memory dispute, DisputeState state) internal pure returns (bool) {
+        // Direct enum comparison is safer than casting to uint8
+        return dispute.state == state;
     }
 }

@@ -14,7 +14,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *   Data availability is guaranteed by the emission of `ProposalSubmitted` events
  * - This version is completely decoupled from voting/challenge logic
  */
-contract TransactionManager is ReentrancyGuard {
+contract TransactionManager is ITransactionManager, ReentrancyGuard {
     event ProposalSubmitted(bytes32 indexed proposalId, string transaction, address indexed submitter);
     event ProposalOptimisticallyApproved(bytes32 indexed proposalId);
     event ProposalFinalized(bytes32 indexed proposalId, bool approved);
@@ -75,11 +75,17 @@ contract TransactionManager is ReentrancyGuard {
 
         // Perform LLM validation immediately, this could be async in a future version with a callback
         bool llmResult = llmOracle.validateTransaction(transaction);
+
+        // CHECKS-EFFECTS-INTERACTIONS: Update state BEFORE external calls
+        proposalCount++; // Increment counter before external call
+
         if (llmResult) {
-            // If LLM approved, delegate to consensus mechanism
-            consensus.initializeConsensus(proposalId, transaction, msg.sender);
-            // Update the proposal status to optimistic approved
+            // Update the proposal status to optimistic approved BEFORE external call
             proposals[proposalId].status = IConsensus.ProposalStatus.OptimisticApproved;
+
+            // External call to consensus mechanism (after state updates)
+            consensus.initializeConsensus(proposalId, transaction, msg.sender);
+
             emit ProposalOptimisticallyApproved(proposalId);
         } else {
             // LLM rejected - store as rejected
@@ -87,7 +93,6 @@ contract TransactionManager is ReentrancyGuard {
             emit ProposalRejected(proposalId);
         }
 
-        proposalCount++;
         emit LLMValidationResult(proposalId, llmResult);
         emit ProposalSubmitted(proposalId, transaction, msg.sender);
         return proposalId;

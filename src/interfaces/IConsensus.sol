@@ -119,9 +119,9 @@ interface IConsensus {
 
     /**
      * @dev Check if consensus supports challenges/disputes
-     * @return supportsDisputes Whether this consensus mechanism supports disputes
+     * @return disputesSupported Whether this consensus mechanism supports disputes
      */
-    function supportsDisputes() external pure returns (bool supportsDisputes);
+    function supportsDisputes() external pure returns (bool disputesSupported);
 
     // ==================== CALLBACK FUNCTIONS ====================
 

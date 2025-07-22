@@ -6,6 +6,7 @@
 
 - [Getting Started](#getting-started)
 - [Architecture Overview](#architecture-overview)
+- [Security Report](#security-report)
 - [Core Components](#core-components)
 - [Design Philosophy](#design-philosophy)
 - [Test Suite](#test-suite)
@@ -112,6 +113,9 @@ The system implements a **centralized state inbox** approach with **modular cons
 5. **Gas Efficiency**: BeaconProxy pattern for validator contracts
 
 ---
+# Security Report
+
+I acknowledge some errors found in REPORT file, please visit it in the root folder.
 
 ## Core Components
 

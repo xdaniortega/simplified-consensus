@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import "./ValidatorLogic.sol";
 
 /**
@@ -15,9 +16,11 @@ import "./ValidatorLogic.sol";
  *      Deploys BeaconProxy contracts for validators and manages their lifecycle.
  *      Supports CREATE2 for predictable addresses and pre-funding capabilities.
  *      Manages staking positions for granular stake tracking.
+ *      Uses EnumerableSet for O(1) validator addition/removal operations.
  */
 contract StakingManager is ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using EnumerableSet for EnumerableSet.AddressSet;
     event ValidatorCreated(address indexed validator, address indexed proxy, uint256 stake);
     event ValidatorRemoved(address indexed validator);
     event ConsensusModuleUpdated(address indexed oldModule, address indexed newModule);
@@ -51,7 +54,7 @@ contract StakingManager is ReentrancyGuard {
 
     mapping(address => address) public validatorToProxy; // user to proxy
     mapping(address => bool) public isValidator;
-    address[] public validators;
+    EnumerableSet.AddressSet private _validators;
 
     modifier onlyValidator() {
         if (!isValidator[msg.sender]) {
@@ -79,7 +82,7 @@ contract StakingManager is ReentrancyGuard {
         if (isValidator[msg.sender]) {
             revert AlreadyValidator();
         }
-        if (validators.length >= maxValidators) {
+        if (_validators.length() >= maxValidators) {
             revert MaxValidatorsReached();
         }
 
@@ -105,7 +108,7 @@ contract StakingManager is ReentrancyGuard {
         }
         validatorToProxy[msg.sender] = proxy;
         isValidator[msg.sender] = true;
-        validators.push(msg.sender);
+        _validators.add(msg.sender);
         emit ValidatorCreated(msg.sender, proxy, amount);
     }
 
@@ -147,7 +150,7 @@ contract StakingManager is ReentrancyGuard {
     function getTopNValidators(
         uint256 count
     ) external view returns (address[] memory topValidators, uint256[] memory topStakes) {
-        uint256 totalValidators = validators.length;
+        uint256 totalValidators = _validators.length();
         if (totalValidators == 0) {
             return (new address[](0), new uint256[](0));
         }
@@ -160,8 +163,8 @@ contract StakingManager is ReentrancyGuard {
 
         // Load all validators and their stakes
         for (uint256 i = 0; i < totalValidators; i++) {
-            allValidators[i] = validators[i];
-            allStakes[i] = getValidatorStake(validators[i]);
+            allValidators[i] = _validators.at(i);
+            allStakes[i] = getValidatorStake(_validators.at(i));
         }
 
         // Optimized partial selection sort - O(n * k) complexity
@@ -206,7 +209,7 @@ contract StakingManager is ReentrancyGuard {
      * @return allValidators Array of all validator addresses
      */
     function getAllValidators() external view returns (address[] memory) {
-        return validators;
+        return _validators.values();
     }
 
     /**
@@ -214,7 +217,7 @@ contract StakingManager is ReentrancyGuard {
      * @return count Number of validators
      */
     function getValidatorCount() external view returns (uint256) {
-        return validators.length;
+        return _validators.length();
     }
 
     /**
@@ -324,20 +327,14 @@ contract StakingManager is ReentrancyGuard {
 
         validatorToProxy[msg.sender] = proxy;
         isValidator[msg.sender] = true;
-        validators.push(msg.sender);
+        _validators.add(msg.sender);
     }
 
     /**
-     * @dev Internal function to remove validator from array
+     * @dev Internal function to remove validator from set - O(1) operation
      * @param validator Validator to remove
      */
     function _removeValidatorFromArray(address validator) internal {
-        for (uint256 i = 0; i < validators.length; i++) {
-            if (validators[i] == validator) {
-                validators[i] = validators[validators.length - 1];
-                validators.pop();
-                break;
-            }
-        }
+        _validators.remove(validator);
     }
 }

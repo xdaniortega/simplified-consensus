@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/StorageSlot.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "forge-std/console.sol";
 
 /**
  * @title ValidatorLogic
@@ -119,8 +118,6 @@ contract ValidatorLogic {
      */
     function unstake(uint256 amount) external onlyFactory returns (uint256 totalUnstaked) {
         uint256 stakeSlot = StorageSlot.getUint256Slot(STAKE_AMOUNT_SLOT).value;
-        console.log("stakeSlot before unstake", stakeSlot);
-        console.log("positions length", getValidatorPositionsLength(getValidatorOwner()));
         if (amount > stakeSlot) revert InsufficientStakeAmount();
 
         totalUnstaked = _unstake(getValidatorOwner(), amount, stakeSlot);
@@ -286,7 +283,6 @@ contract ValidatorLogic {
 
         setStakingPosition(positionId, position);
         pushValidatorPosition(owner, positionId);
-        console.log("create posId", positionId, "amount", amount);
         emit StakingPositionCreated(owner, positionId, amount);
         return positionId;
     }
@@ -302,13 +298,10 @@ contract ValidatorLogic {
         uint256 totalPositions = getValidatorPositionsLength(validator);
         uint256 remaining = amount;
         uint256 unstaked = 0;
-        console.log("totalPositions", totalPositions);
 
         // LIFO: start from the last position
         for (uint256 i = totalPositions; i > 0 && remaining > 0;) {
             uint256 posId = getValidatorPosition(validator, i - 1);
-            console.log("index", i - 1);
-            console.log("posId", posId);
             if (posId == 0) {
                 unchecked {
                     i--;
@@ -316,7 +309,6 @@ contract ValidatorLogic {
                 continue;
             }
             StakingPosition memory pos = getStakingPosition(posId);
-            console.log("pos.amount before", pos.amount);
             if (pos.amount == 0) {
                 // Remove this position from the array to avoid stale posIds
                 deleteValidatorPosition(validator, i - 1);
@@ -327,12 +319,9 @@ contract ValidatorLogic {
             }
 
             uint256 toUnstake = pos.amount > remaining ? remaining : pos.amount;
-            console.log("toUnstake", toUnstake);
             pos.amount -= toUnstake;
             remaining -= toUnstake;
             unstaked += toUnstake;
-            console.log("pos.amount after", pos.amount);
-            console.log("remaining", remaining);
 
             if (pos.amount == 0) {
                 _deleteStakingPosition(posId);
